@@ -1,34 +1,34 @@
 #include "room_engine/application.hpp"
+#include "room_engine/renderer/debug_draw.hpp"
 
 #include <SDL3/SDL.h>
 
-#include <iostream>
+#include <array>
 
 int main() {
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-        std::cerr << "SDL initialization failed: " << SDL_GetError() << '\n';
-        return 1;
-    }
-
-    SDL_Window* window = SDL_CreateWindow(room_engine::application_name().data(), 1280, 720, 0);
-    if (window == nullptr) {
-        std::cerr << "SDL window creation failed: " << SDL_GetError() << '\n';
-        SDL_Quit();
-        return 1;
-    }
-
-    bool running = true;
-    SDL_Event event{};
-    while (running) {
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_EVENT_QUIT) {
-                running = false;
-            }
+    room_engine::Application application;
+    if (!application.initialize()) return 1;
+    room_engine::PerspectiveCamera camera;
+    camera.position = {7.0F, 6.0F, 7.0F};
+    room_engine::Material debug_material;
+    const std::array triangle_vertices = {
+        room_engine::Vertex{{-0.75F, 0.01F, 0.0F}, {240, 80, 80, 255}},
+        room_engine::Vertex{{0.75F, 0.01F, 0.0F}, {80, 240, 80, 255}},
+        room_engine::Vertex{{0.0F, 0.01F, 1.0F}, {80, 120, 240, 255}}};
+    const room_engine::VertexBuffer triangle =
+        application.renderer()->create_vertex_buffer(triangle_vertices);
+    while (application.running()) {
+        application.poll_events();
+        if (application.begin_frame()) {
+            application.renderer()->set_camera(camera);
+            application.renderer()->draw(triangle, triangle_vertices.size(), debug_material);
+            room_engine::DebugDraw debug;
+            debug.grid(10, 1.0F);
+            debug.axes();
+            debug.flush(*application.renderer(), debug_material);
+            application.end_frame();
         }
         SDL_Delay(16);
     }
-
-    SDL_DestroyWindow(window);
-    SDL_Quit();
     return 0;
 }

@@ -27,12 +27,17 @@ endif
 
 SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(SDL3_PKG) 2>/dev/null)
 SDL_LIBS := $(shell $(PKG_CONFIG) --libs $(SDL3_PKG) 2>/dev/null)
+BGFX_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags bgfx 2>/dev/null)
+BGFX_LIBS ?= $(shell $(PKG_CONFIG) --libs bgfx 2>/dev/null)
+ifneq ($(strip $(BGFX_CFLAGS)$(BGFX_LIBS)),)
+CPPFLAGS += -DROOM_ENGINE_USE_BGFX $(BGFX_CFLAGS)
+endif
 BUILD_DIR := out/$(shell printf '%s' $(CONFIG) | tr '[:upper:]' '[:lower:]')
 
-CORE_SOURCES := src/room_engine/application.cpp
+CORE_SOURCES := src/room_engine/application.cpp src/room_engine/renderer/renderer.cpp src/room_engine/renderer/debug_draw.cpp
 APP_SOURCES := $(CORE_SOURCES) src/main.cpp
-TEST_SOURCES := $(CORE_SOURCES) tests/smoke_test.cpp
-FORMAT_SOURCES := $(APP_SOURCES) src/room_engine/application.hpp tests/smoke_test.cpp
+TEST_SOURCES := src/room_engine/renderer/renderer.cpp src/room_engine/renderer/debug_draw.cpp tests/smoke_test.cpp
+FORMAT_SOURCES := $(APP_SOURCES) src/room_engine/application.hpp src/room_engine/renderer/renderer.hpp src/room_engine/renderer/camera.hpp src/room_engine/renderer/math.hpp src/room_engine/renderer/debug_draw.hpp tests/smoke_test.cpp
 APP_OBJECTS := $(APP_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
 TEST_OBJECTS := $(TEST_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
 APP := $(BUILD_DIR)/room_engine_app
@@ -52,7 +57,7 @@ build: verify-tools verify-sdl $(APP) $(TEST)
 
 $(APP): $(APP_OBJECTS)
 	@mkdir -p $(@D)
-	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(LDLIBS) -o $@
+	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(LDLIBS) -o $@
 
 $(TEST): $(TEST_OBJECTS)
 	@mkdir -p $(@D)

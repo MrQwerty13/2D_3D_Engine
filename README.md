@@ -207,8 +207,21 @@ make format
 make check
 ```
 
-The initial executable creates an SDL window and processes close events. It
-does not initialize bgfx or perform any rendering yet.
+The executable owns the SDL application lifecycle and submits a triangle plus
+debug grid and axes through the renderer abstraction. The default build uses a
+small no-op renderer when bgfx is unavailable, which keeps tests and engine
+tools buildable without a graphics SDK. To enable the bgfx backend, provide
+bgfx compiler/linker flags (for example, from a local bgfx build):
+
+```sh
+make BGFX_CFLAGS="-I/path/to/bgfx/include -I/path/to/bx/include" \
+     BGFX_LIBS="-L/path/to/bgfx/lib -lbgfx -lbx -lbimg" build
+```
+
+The shader manager accepts bgfx shader binaries produced from
+`assets/shaders/debug.vs.sc` and `debug.fs.sc` with bgfx's `shaderc` tool. The
+renderer API only exposes engine-owned handles and data types; bgfx types are
+confined to `renderer.cpp`.
 
 ## License
 
