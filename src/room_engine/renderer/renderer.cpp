@@ -18,7 +18,10 @@ namespace {
 class NullRenderer final : public Renderer {
 public:
     explicit NullRenderer(SDL_Window* window) : renderer_(SDL_CreateRenderer(window, nullptr)) {}
-    ~NullRenderer() override { if (renderer_ != nullptr) SDL_DestroyRenderer(renderer_); }
+    ~NullRenderer() override {
+        for (auto* texture : textures_) if (texture != nullptr) SDL_DestroyTexture(texture);
+        if (renderer_ != nullptr) SDL_DestroyRenderer(renderer_);
+    }
 
     bool is_ready() const noexcept override { return renderer_ != nullptr; }
     bool begin_frame(Color clear_color) override {
@@ -27,10 +30,27 @@ public:
         return SDL_RenderClear(renderer_);
     }
     void set_camera(const Camera& camera) override { view_projection_ = camera.view_projection(); }
-    void draw(const VertexBuffer& vertices, std::size_t vertex_count, const Material&) override {
+    void draw(const VertexBuffer& vertices, std::size_t vertex_count, const Material& material) override {
         if (renderer_ == nullptr || !vertices.valid() || vertices.id >= vertex_buffers_.size()) return;
         const auto& data = vertex_buffers_[vertices.id];
         const std::size_t count = std::min(vertex_count, data.size());
+        if (material.topology == PrimitiveTopology::Triangles) {
+            std::vector<SDL_Vertex> sdl_vertices;
+            sdl_vertices.reserve(count);
+            for (std::size_t i = 0; i < count; ++i) {
+                const auto projected = project(data[i]);
+                if (!projected.has_value()) continue;
+                sdl_vertices.push_back({{projected->first, projected->second},
+                                        {static_cast<float>(data[i].color.r),
+                                         static_cast<float>(data[i].color.g),
+                                         static_cast<float>(data[i].color.b),
+                                         static_cast<float>(data[i].color.a)},
+                                        {data[i].uv.x, data[i].uv.y}});
+            }
+            if (sdl_vertices.size() >= 3) SDL_RenderGeometry(renderer_, texture(material.base_color_texture), sdl_vertices.data(),
+                                                               static_cast<int>(sdl_vertices.size()), nullptr, 0);
+            return;
+        }
         for (std::size_t i = 0; i + 1 < count; i += 2) {
             const auto start = project(data[i]);
             const auto end = project(data[i + 1]);
@@ -50,12 +70,23 @@ public:
     Shader load_shader(std::span<const std::byte>, std::span<const std::byte>) override {
         return {next_id_++};
     }
-    Texture create_texture(std::uint32_t, std::uint32_t, std::span<const std::byte>) override {
-        return {next_id_++};
+    Texture create_texture(std::uint32_t width, std::uint32_t height,
+                           std::span<const std::byte> rgba8) override {
+        SDL_Texture* texture = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32,
+                                                  SDL_TEXTUREACCESS_STATIC,
+                                                  static_cast<int>(width), static_cast<int>(height));
+        if (texture != nullptr) SDL_UpdateTexture(texture, nullptr, rgba8.data(),
+                                                   static_cast<int>(width * 4U));
+        textures_.push_back(texture);
+        return {static_cast<std::uint16_t>(textures_.size() - 1)};
     }
     void end_frame() override { if (renderer_ != nullptr) SDL_RenderPresent(renderer_); }
 
 private:
+    [[nodiscard]] SDL_Texture* texture(Texture handle) const noexcept {
+        return handle.valid() && handle.id < textures_.size() ? textures_[handle.id] : nullptr;
+    }
+
     [[nodiscard]] std::optional<std::pair<float, float>> project(const Vertex& vertex) const {
         const auto& m = view_projection_.value;
         const float x = m[0] * vertex.position.x + m[4] * vertex.position.y +
@@ -74,6 +105,7 @@ private:
 
     SDL_Renderer* renderer_ = nullptr;
     std::vector<std::vector<Vertex>> vertex_buffers_{{}};
+    std::vector<SDL_Texture*> textures_{nullptr};
     Mat4 view_projection_ = Mat4::identity();
     std::uint16_t next_id_ = 1;
 };
@@ -171,7 +203,8 @@ private:
         static bool initialized = false;
         if (!initialized) {
             layout.begin().add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
-                .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true).end();
+                .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
+                .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float).end();
             initialized = true;
         }
         return layout;

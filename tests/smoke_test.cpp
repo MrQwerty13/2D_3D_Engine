@@ -1,6 +1,8 @@
 #include "room_engine/application.hpp"
 #include "room_engine/core/entity.hpp"
 #include "room_engine/core/transform.hpp"
+#include "room_engine/renderer/viewport.hpp"
+#include "room_engine/renderer/renderer_2d.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -27,6 +29,22 @@ int main() {
     assert(std::fabs(point.x - 12.0F) < 0.001F);
     assert(std::fabs(point.y - 4.0F) < 0.001F);
     assert(std::fabs(point.z - 6.0F) < 0.001F);
+
+    room_engine::Viewport2D viewport{800.0F, 600.0F};
+    viewport.set_center({10.0F, -4.0F});
+    const room_engine::Vec2 world_point{12.5F, -2.0F};
+    const auto screen_point = viewport.world_to_screen(world_point);
+    const auto round_trip = viewport.screen_to_world(screen_point);
+    assert(std::fabs(round_trip.x - world_point.x) < 0.001F);
+    assert(std::fabs(round_trip.y - world_point.y) < 0.001F);
+    assert(std::fabs(viewport.world_to_screen(viewport.center()).x - 400.0F) < 0.001F);
+    assert(std::fabs(viewport.world_to_screen(viewport.center()).y - 300.0F) < 0.001F);
+
+    room_engine::Renderer2D scene{viewport};
+    scene.begin();
+    scene.draw_rect({{9.0F, -5.0F}, {13.0F, -1.0F}}, {255, 255, 255, 255}, 0, 42);
+    assert(scene.select(viewport.world_to_screen({11.0F, -3.0F})).value() == 42);
+    assert(scene.selected().value() == 42);
 
     return 0;
 }

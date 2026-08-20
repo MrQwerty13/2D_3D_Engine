@@ -14,11 +14,14 @@ struct SDL_Window;
 namespace room_engine {
 
 struct Color { std::uint8_t r = 0; std::uint8_t g = 0; std::uint8_t b = 0; std::uint8_t a = 255; };
-struct Vertex { Vec3 position{}; Color color{255, 255, 255, 255}; };
+struct Vec2 { float x = 0.0F; float y = 0.0F; };
+struct Vertex { Vec3 position{}; Color color{255, 255, 255, 255}; Vec2 uv{}; };
 struct VertexBuffer { std::uint16_t id = 0; [[nodiscard]] bool valid() const noexcept { return id != 0; } };
 struct IndexBuffer { std::uint16_t id = 0; [[nodiscard]] bool valid() const noexcept { return id != 0; } };
 struct Shader { std::uint16_t id = 0; [[nodiscard]] bool valid() const noexcept { return id != 0; } };
 struct Texture { std::uint16_t id = 0; [[nodiscard]] bool valid() const noexcept { return id != 0; } };
+
+enum class PrimitiveTopology { Lines, Triangles };
 
 struct Material {
     Color base_color{255, 255, 255, 255};
@@ -26,6 +29,7 @@ struct Material {
     float roughness = 1.0F;
     Texture base_color_texture{};
     Shader shader{};
+    PrimitiveTopology topology = PrimitiveTopology::Triangles;
 };
 
 struct RendererConfig {
