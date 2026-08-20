@@ -7,9 +7,47 @@
 #include <fstream>
 #include <limits>
 #include <sstream>
+#include <unordered_map>
 
 namespace room_engine {
 namespace {
+
+void append_box(Mesh& mesh, float min_x, float min_y, float min_z, float max_x, float max_y, float max_z) {
+    const std::array<Vec3, 8> positions{{{min_x, min_y, min_z}, {max_x, min_y, min_z}, {max_x, max_y, min_z}, {min_x, max_y, min_z},
+                                         {min_x, min_y, max_z}, {max_x, min_y, max_z}, {max_x, max_y, max_z}, {min_x, max_y, max_z}}};
+    struct Face { std::array<int, 4> corners; Vec3 normal; };
+    const std::array<Face, 6> faces{{{{0, 3, 2, 1}, {0, 0, -1}}, {{4, 5, 6, 7}, {0, 0, 1}},
+                                     {{0, 4, 7, 3}, {-1, 0, 0}}, {{1, 2, 6, 5}, {1, 0, 0}},
+                                     {{3, 7, 6, 2}, {0, 1, 0}}, {{0, 1, 5, 4}, {0, -1, 0}}}};
+    for (const auto& face : faces) {
+        const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
+        const std::array<Vec2, 4> uvs{{{0, 0}, {1, 0}, {1, 1}, {0, 1}}};
+        for (std::size_t i = 0; i < 4; ++i) {
+            const auto corner = static_cast<std::size_t>(face.corners[i]);
+            mesh.vertices.push_back({positions[corner], {}, uvs[i], face.normal});
+        }
+        mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
+    }
+}
+
+void append_polygon(Mesh& mesh, const std::vector<Point2>& boundary, float y, bool upward) {
+    if (boundary.size() < 3) return;
+    const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
+    const Vec3 normal = upward ? Vec3{0, 1, 0} : Vec3{0, -1, 0};
+    for (const auto point : boundary) mesh.vertices.push_back({{point.x, y, point.y}, {}, {point.x, point.y}, normal});
+    for (std::size_t i = 1; i + 1 < boundary.size(); ++i) {
+        if (upward) mesh.indices.insert(mesh.indices.end(), {base, base + static_cast<std::uint32_t>(i + 1), base + static_cast<std::uint32_t>(i)});
+        else mesh.indices.insert(mesh.indices.end(), {base, base + static_cast<std::uint32_t>(i), base + static_cast<std::uint32_t>(i + 1)});
+    }
+}
+
+RenderMaterial render_material(const Material* material) {
+    if (material == nullptr) return {};
+    const auto channel = [](float value) { return static_cast<std::uint8_t>(std::clamp(value * 255.0F, 0.0F, 255.0F)); };
+    return {{channel(material->albedo.x), channel(material->albedo.y), channel(material->albedo.z), 255}, 0.0F, material->roughness};
+}
+
+std::uint64_t scene_id(std::string_view id) { return static_cast<std::uint64_t>(std::hash<std::string_view>{}(id)); }
 
 struct JsonObject { std::string_view text; };
 
@@ -277,14 +315,99 @@ std::optional<std::uint64_t> Renderer3D::select(ScreenPoint screen, const Camera
 
 Mesh make_room_floor(float width, float depth) {
     const float x = width * 0.5F; const float z = depth * 0.5F;
-    Mesh mesh; mesh.vertices = {{{-x, 0, -z}, {}, {0, 0}, {0, 1, 0}}, {{x, 0, -z}, {}, {1, 0}, {0, 1, 0}}, {{x, 0, z}, {}, {1, 1}, {0, 1, 0}}, {{-x, 0, z}, {}, {0, 1}, {0, 1, 0}}}; mesh.indices = {0, 2, 1, 0, 3, 2}; return mesh;
+    return make_room_floor(Floor{"sample-floor", {{-x, -z}, {x, -z}, {x, z}, {-x, z}}, 0.0F, {}});
 }
 
 Mesh make_room_wall(float length, float height, float thickness) {
-    const float half = length * 0.5F; const float depth = thickness * 0.5F;
-    Mesh mesh; mesh.vertices = {{{-half, 0, -depth}}, {{half, 0, -depth}}, {{half, height, -depth}}, {{-half, height, -depth}}, {{-half, 0, depth}}, {{half, 0, depth}}, {{half, height, depth}}, {{-half, height, depth}}};
-    mesh.indices = {0, 1, 2, 0, 2, 3, 5, 4, 7, 5, 7, 6, 4, 0, 3, 4, 3, 7, 1, 5, 6, 1, 6, 2, 3, 2, 6, 3, 6, 7, 4, 5, 1, 4, 1, 0}; return mesh;
+    Mesh mesh;
+    append_box(mesh, -length * 0.5F, 0.0F, -thickness * 0.5F, length * 0.5F, height, thickness * 0.5F);
+    return mesh;
 }
+
+Mesh make_room_wall(const WallSegment& wall, const std::vector<const Door*>& doors,
+                   const std::vector<const Window*>& windows) {
+    const float length = std::hypot(wall.end.x - wall.start.x, wall.end.y - wall.start.y);
+    Mesh mesh;
+    if (length <= 0.0001F || wall.height <= 0.0F || wall.thickness <= 0.0F) return mesh;
+    std::vector<std::pair<float, float>> openings;
+    for (const auto* opening : doors) openings.emplace_back(opening->offset, opening->offset + opening->width);
+    for (const auto* opening : windows) openings.emplace_back(opening->offset, opening->offset + opening->width);
+    std::sort(openings.begin(), openings.end());
+    float cursor = 0.0F;
+    for (const auto [start, end] : openings) {
+        const float opening_start = std::clamp(start, 0.0F, length);
+        const float opening_end = std::clamp(end, opening_start, length);
+        if (opening_start > cursor) append_box(mesh, cursor, 0.0F, -wall.thickness * 0.5F, opening_start, wall.height, wall.thickness * 0.5F);
+        cursor = std::max(cursor, opening_end);
+    }
+    if (cursor < length) append_box(mesh, cursor, 0.0F, -wall.thickness * 0.5F, length, wall.height, wall.thickness * 0.5F);
+    // Add the lintels and sills around non-floor openings so the hole has real jamb faces.
+    auto append_opening_caps = [&](float offset, float width, float bottom, float opening_height) {
+        const float end = std::clamp(offset + width, 0.0F, length);
+        const float start = std::clamp(offset, 0.0F, end);
+        if (bottom > 0.0F) append_box(mesh, start, 0.0F, -wall.thickness * 0.5F, end, std::min(bottom, wall.height), wall.thickness * 0.5F);
+        const float top = std::min(bottom + opening_height, wall.height);
+        if (top < wall.height) append_box(mesh, start, top, -wall.thickness * 0.5F, end, wall.height, wall.thickness * 0.5F);
+    };
+    for (const auto* opening : doors) append_opening_caps(opening->offset, opening->width, opening->bottom, opening->height);
+    for (const auto* opening : windows) append_opening_caps(opening->offset, opening->width, opening->bottom, opening->height);
+    return mesh;
+}
+
+Mesh make_room_floor(const Floor& floor) {
+    Mesh mesh;
+    append_polygon(mesh, floor.boundary, floor.elevation, true);
+    return mesh;
+}
+
+Mesh make_room_ceiling(const Ceiling& ceiling) {
+    Mesh mesh;
+    append_polygon(mesh, ceiling.boundary, ceiling.elevation, false);
+    return mesh;
+}
+
+Mesh make_room_opening(float width, float height, float thickness) {
+    Mesh mesh;
+    if (width > 0.0F && height > 0.0F && thickness > 0.0F) append_box(mesh, -width * 0.5F, 0.0F, -thickness * 0.5F, width * 0.5F, height, thickness * 0.5F);
+    return mesh;
+}
+
+bool populate_room(Renderer3D& renderer, const RoomDesign& design, const StableId& room_id) {
+    if (!design.valid()) return false;
+    const auto room_it = std::find_if(design.rooms.begin(), design.rooms.end(), [&](const Room& room) { return room_id.empty() || room.id == room_id; });
+    if (room_it == design.rooms.end()) return false;
+    const Room& room = *room_it;
+    const auto material_for = [&](const StableId& id) -> const Material* {
+        const auto it = std::find_if(design.materials.begin(), design.materials.end(), [&](const Material& material) { return material.id == id; });
+        return it == design.materials.end() ? nullptr : &*it;
+    };
+    renderer.begin();
+    for (const auto& wall : room.walls) {
+        std::vector<const Door*> doors;
+        std::vector<const Window*> windows;
+        for (const auto& door : room.doors) if (door.wall_id == wall.id) doors.push_back(&door);
+        for (const auto& window : room.windows) if (window.wall_id == wall.id) windows.push_back(&window);
+        const float angle = std::atan2(-(wall.end.y - wall.start.y), wall.end.x - wall.start.x);
+        renderer.add_mesh(make_room_wall(wall, doors, windows), {{wall.start.x, 0.0F, wall.start.y}, Quaternion::from_axis_angle({0, 1, 0}, angle)}, render_material(material_for(wall.material_id)), scene_id(wall.id));
+        for (const auto* door : doors) {
+            const float center = door->offset + door->width * 0.5F;
+            const float dx = (wall.end.x - wall.start.x) / std::hypot(wall.end.x - wall.start.x, wall.end.y - wall.start.y);
+            const float dz = (wall.end.y - wall.start.y) / std::hypot(wall.end.x - wall.start.x, wall.end.y - wall.start.y);
+            renderer.add_mesh(make_room_opening(door->width, door->height, std::max(wall.thickness * 0.15F, 0.01F)), {{wall.start.x + dx * center, door->bottom, wall.start.y + dz * center}, Quaternion::from_axis_angle({0, 1, 0}, angle)}, render_material(material_for(door->material_id)), scene_id(door->id));
+        }
+        for (const auto* window : windows) {
+            const float center = window->offset + window->width * 0.5F;
+            const float dx = (wall.end.x - wall.start.x) / std::hypot(wall.end.x - wall.start.x, wall.end.y - wall.start.y);
+            const float dz = (wall.end.y - wall.start.y) / std::hypot(wall.end.x - wall.start.x, wall.end.y - wall.start.y);
+            renderer.add_mesh(make_room_opening(window->width, window->height, std::max(wall.thickness * 0.15F, 0.01F)), {{wall.start.x + dx * center, window->bottom, wall.start.y + dz * center}, Quaternion::from_axis_angle({0, 1, 0}, angle)}, render_material(material_for(window->material_id)), scene_id(window->id));
+        }
+    }
+    if (room.floor) renderer.add_mesh(make_room_floor(*room.floor), {}, render_material(material_for(room.floor->material_id)), scene_id(room.floor->id));
+    if (room.ceiling) renderer.add_mesh(make_room_ceiling(*room.ceiling), {}, render_material(material_for(room.ceiling->material_id)), scene_id(room.ceiling->id));
+    return true;
+}
+
+bool Renderer3D::update_from_room(const RoomDesign& design, const StableId& room_id) { return populate_room(*this, design, room_id); }
 
 void populate_sample_room(Renderer3D& renderer) {
     renderer.begin();

@@ -2,6 +2,7 @@
 
 #include "room_engine/renderer/renderer.hpp"
 #include "room_engine/renderer/viewport.hpp"
+#include "room_engine/core/room_design.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -82,6 +83,8 @@ public:
     void set_directional_light(DirectionalLight light) noexcept { directional_ = light; }
     void add_point_light(PointLight light) { points_.push_back(light); }
     void clear_lights() noexcept { points_.clear(); }
+    // Rebuilds the scene only when the validated 2D design contains the requested room.
+    [[nodiscard]] bool update_from_room(const RoomDesign& design, const StableId& room_id = {});
     void flush(Renderer& renderer, const Camera& camera);
     [[nodiscard]] std::optional<RayHit> raycast(ScreenPoint screen, const Camera& camera,
                                                 float viewport_width, float viewport_height) const;
@@ -100,6 +103,13 @@ private:
 
 [[nodiscard]] Mesh make_room_floor(float width = 8.0F, float depth = 6.0F);
 [[nodiscard]] Mesh make_room_wall(float length, float height, float thickness = 0.15F);
+[[nodiscard]] Mesh make_room_wall(const WallSegment& wall, const std::vector<const Door*>& doors = {},
+                                  const std::vector<const Window*>& windows = {});
+[[nodiscard]] Mesh make_room_floor(const Floor& floor);
+[[nodiscard]] Mesh make_room_ceiling(const Ceiling& ceiling);
+[[nodiscard]] Mesh make_room_opening(float width, float height, float thickness);
+[[nodiscard]] bool populate_room(Renderer3D& renderer, const RoomDesign& design,
+                                 const StableId& room_id = {});
 void populate_sample_room(Renderer3D& renderer);
 
 }  // namespace room_engine

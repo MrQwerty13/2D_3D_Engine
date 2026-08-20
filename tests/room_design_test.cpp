@@ -1,7 +1,10 @@
 #include "room_engine/core/room_design.hpp"
 #include "room_engine/core/floor_plan_editor.hpp"
+#include "room_engine/renderer/renderer_3d.hpp"
 
 #include <cassert>
+#include <cmath>
+#include <limits>
 
 using namespace room_engine;
 
@@ -26,6 +29,51 @@ RoomDesign valid_design() {
 }  // namespace
 
 void run_room_design_tests() {
+    {
+        const auto mesh = make_room_wall(4.0F, 2.5F, 0.2F);
+        float min_x = std::numeric_limits<float>::max();
+        float max_x = std::numeric_limits<float>::lowest();
+        float max_y = std::numeric_limits<float>::lowest();
+        for (const auto& vertex : mesh.vertices) {
+            min_x = std::min(min_x, vertex.position.x);
+            max_x = std::max(max_x, vertex.position.x);
+            max_y = std::max(max_y, vertex.position.y);
+            assert(std::fabs(vertex.normal.x) + std::fabs(vertex.normal.y) + std::fabs(vertex.normal.z) > 0.99F);
+            assert(vertex.uv.x >= 0.0F && vertex.uv.x <= 1.0F);
+            assert(vertex.uv.y >= 0.0F && vertex.uv.y <= 1.0F);
+        }
+        assert(std::fabs(min_x + 2.0F) < 0.001F);
+        assert(std::fabs(max_x - 2.0F) < 0.001F);
+        assert(std::fabs(max_y - 2.5F) < 0.001F);
+    }
+    {
+        RoomDesign design = valid_design();
+        const auto& wall = design.rooms[0].walls[0];
+        std::vector<const Door*> doors{&design.rooms[0].doors[0]};
+        std::vector<const Window*> windows{&design.rooms[0].windows[0]};
+        const auto mesh = make_room_wall(wall, doors, windows);
+        for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+            const auto& a = mesh.vertices[mesh.indices[i]].position;
+            const auto& b = mesh.vertices[mesh.indices[i + 1]].position;
+            const auto& c = mesh.vertices[mesh.indices[i + 2]].position;
+            const float x = (a.x + b.x + c.x) / 3.0F;
+            const float y = (a.y + b.y + c.y) / 3.0F;
+            const bool in_door = x > 0.5F && x < 1.4F && y > 0.01F && y < 2.09F;
+            const bool in_window = x > 2.0F && x < 3.2F && y > 0.81F && y < 1.79F;
+            assert(!in_door && !in_window);
+        }
+    }
+    {
+        const RoomDesign design = valid_design();
+        Renderer3D scene;
+        assert(scene.update_from_room(design, "room-1"));
+        assert(scene.instances().size() == 5);
+        assert(scene.instances()[0].material.base_color.r == 204);
+        RoomDesign invalid = design;
+        invalid.rooms[0].walls[0].thickness = 0.0F;
+        assert(!scene.update_from_room(invalid, "room-1"));
+        assert(scene.instances().size() == 5);
+    }
     {
         RoomDesign design = valid_design();
         design.rooms[0].walls[0].start = design.rooms[0].walls[0].end;
