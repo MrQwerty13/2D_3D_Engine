@@ -1,35 +1,95 @@
+SHELL := /bin/sh
+
 CXX := clang++
-CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror
+PKG_CONFIG ?= pkg-config
+CLANG_FORMAT ?= clang-format
+
+CONFIG ?= Debug
+VALID_CONFIGS := Debug Release
+ifeq ($(filter $(CONFIG),$(VALID_CONFIGS)),)
+$(error CONFIG must be one of: $(VALID_CONFIGS))
+endif
+
+SDL3_PKG ?= sdl3
+SDL3_VERSION ?= 3.4.14
+
 CPPFLAGS := -Isrc
-SDL_CFLAGS := $(shell pkg-config --cflags sdl3 2>/dev/null)
-SDL_LIBS := $(shell pkg-config --libs sdl3 2>/dev/null)
+CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror
+DEPFLAGS := -MMD -MP
+LDFLAGS :=
+LDLIBS :=
+
+ifeq ($(CONFIG),Debug)
+CONFIG_FLAGS := -O0 -g3
+else
+CONFIG_FLAGS := -O2 -DNDEBUG
+endif
+
+SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(SDL3_PKG) 2>/dev/null)
+SDL_LIBS := $(shell $(PKG_CONFIG) --libs $(SDL3_PKG) 2>/dev/null)
+BUILD_DIR := out/$(shell printf '%s' $(CONFIG) | tr '[:upper:]' '[:lower:]')
 
 CORE_SOURCES := src/room_engine/application.cpp
 APP_SOURCES := $(CORE_SOURCES) src/main.cpp
 TEST_SOURCES := $(CORE_SOURCES) tests/smoke_test.cpp
+FORMAT_SOURCES := $(APP_SOURCES) src/room_engine/application.hpp tests/smoke_test.cpp
+APP_OBJECTS := $(APP_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
+TEST_OBJECTS := $(TEST_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
+APP := $(BUILD_DIR)/room_engine_app
+TEST := $(BUILD_DIR)/room_engine_smoke_tests
 
-DEBUG_DIR := out/debug
-RELEASE_DIR := out/release
-
-.PHONY: all debug release test format clean
+.PHONY: all debug release build test check format format-check clean help verify-tools verify-sdl
 
 all: debug
 
 debug:
-	@mkdir -p $(DEBUG_DIR)
-	$(CXX) $(CXXFLAGS) -O0 -g $(CPPFLAGS) $(SDL_CFLAGS) $(APP_SOURCES) $(SDL_LIBS) -o $(DEBUG_DIR)/room_engine_app
-	$(CXX) $(CXXFLAGS) -O0 -g $(CPPFLAGS) $(TEST_SOURCES) -o $(DEBUG_DIR)/room_engine_smoke_tests
+	$(MAKE) CONFIG=Debug build
 
 release:
-	@mkdir -p $(RELEASE_DIR)
-	$(CXX) $(CXXFLAGS) -O2 -DNDEBUG $(CPPFLAGS) $(SDL_CFLAGS) $(APP_SOURCES) $(SDL_LIBS) -o $(RELEASE_DIR)/room_engine_app
-	$(CXX) $(CXXFLAGS) -O2 -DNDEBUG $(CPPFLAGS) $(TEST_SOURCES) -o $(RELEASE_DIR)/room_engine_smoke_tests
+	$(MAKE) CONFIG=Release build
 
-test: debug
-	$(DEBUG_DIR)/room_engine_smoke_tests
+build: verify-tools verify-sdl $(APP) $(TEST)
+
+$(APP): $(APP_OBJECTS)
+	@mkdir -p $(@D)
+	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(LDLIBS) -o $@
+
+$(TEST): $(TEST_OBJECTS)
+	@mkdir -p $(@D)
+	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
+
+$(BUILD_DIR)/%.o: %.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(CONFIG_FLAGS) $(CPPFLAGS) $(CXXFLAGS) $(DEPFLAGS) $(SDL_CFLAGS) -c $< -o $@
+
+test: CONFIG=Debug
+test: build
+	$(TEST)
+
+check: test format-check
 
 format:
-	clang-format -i src/main.cpp src/room_engine/application.cpp src/room_engine/application.hpp tests/smoke_test.cpp
+	$(CLANG_FORMAT) -i $(FORMAT_SOURCES)
+
+format-check:
+	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || { echo "error: clang-format is required" >&2; exit 1; }
+	@$(CLANG_FORMAT) --dry-run --Werror $(FORMAT_SOURCES)
+
+verify-tools:
+	@command -v $(CXX) >/dev/null 2>&1 || { echo "error: $(CXX) not found" >&2; exit 1; }
+	@command -v $(PKG_CONFIG) >/dev/null 2>&1 || { echo "error: $(PKG_CONFIG) not found" >&2; exit 1; }
+
+verify-sdl:
+	@$(PKG_CONFIG) --exists $(SDL3_PKG) || { echo "error: SDL3 was not found through $(PKG_CONFIG)" >&2; exit 1; }
+	@test "$$($(PKG_CONFIG) --modversion $(SDL3_PKG))" = "$(SDL3_VERSION)" || { \
+		echo "error: expected SDL3 $(SDL3_VERSION), found $$($(PKG_CONFIG) --modversion $(SDL3_PKG))" >&2; \
+		echo "       set SDL3_VERSION=... only when intentionally updating the lock" >&2; exit 1; }
 
 clean:
 	rm -rf out
+
+help:
+	@echo "make [debug|release|test|check|format|clean]"
+	@echo "  CONFIG=Debug|Release selects out/debug or out/release"
+
+-include $(APP_OBJECTS:.o=.d) $(TEST_OBJECTS:.o=.d)

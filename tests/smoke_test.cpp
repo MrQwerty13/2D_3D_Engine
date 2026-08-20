@@ -1,8 +1,7 @@
 #include "room_engine/application.hpp"
 
-#include <cassert>
+#include <string_view>
 
 int main() {
-    assert(room_engine::application_name() == "room_engine");
-    return 0;
+    return room_engine::application_name() == std::string_view{"room_engine"} ? 0 : 1;
 }

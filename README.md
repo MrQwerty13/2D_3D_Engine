@@ -152,8 +152,34 @@ SDL3 must be installed and discoverable through `pkg-config`.
 
 ## Building the foundation
 
-The project uses a Makefile and always compiles with `clang++`. SDL3 is the
-only external dependency in this foundation and must be installed separately.
+The project uses Make and always compiles with `clang++`. SDL3 is the only
+external dependency in this foundation. Its exact `pkg-config` version is
+recorded in [dependencies.lock](dependencies.lock), and the Makefile refuses
+to build against a different version until the lock is deliberately updated.
+
+Install SDL3 3.4.14 and verify that it is visible:
+
+```sh
+pkg-config --modversion sdl3   # must print 3.4.14
+```
+
+On macOS with Homebrew:
+
+```sh
+brew install llvm pkg-config sdl3
+export PATH="$(brew --prefix llvm)/bin:$PATH"
+```
+
+On Debian/Ubuntu-like Linux distributions, use a repository that provides
+SDL3 development files, then install Clang, Make, and pkg-config alongside it:
+
+```sh
+sudo apt install clang make pkg-config libsdl3-dev
+```
+
+If the distribution package has another version, install SDL3 3.4.14 from
+source or update both `dependencies.lock` and `SDL3_VERSION` in the Makefile
+as a reviewed dependency change.
 
 Debug build and tests:
 
@@ -166,16 +192,19 @@ Release build and tests:
 
 ```sh
 make release
+make CONFIG=Release test
 ```
 
 On macOS, install LLVM/Apple Clang and SDL3 with Homebrew. On Linux, install
 Clang, Make, SDL3, and the SDL3 development package using the distribution's
 package manager. Verify that `pkg-config --modversion sdl3` succeeds.
 
-The `format` target runs the repository's `.clang-format` configuration:
+The `format` target runs the repository's `.clang-format` configuration, and
+`make check` runs the Debug smoke test plus formatting validation:
 
 ```sh
 make format
+make check
 ```
 
 The initial executable creates an SDL window and processes close events. It
