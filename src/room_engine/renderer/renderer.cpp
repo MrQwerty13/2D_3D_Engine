@@ -30,7 +30,7 @@ public:
         return SDL_RenderClear(renderer_);
     }
     void set_camera(const Camera& camera) override { view_projection_ = camera.view_projection(); }
-    void draw(const VertexBuffer& vertices, std::size_t vertex_count, const Material& material) override {
+    void draw(const VertexBuffer& vertices, std::size_t vertex_count, const RenderMaterial& material) override {
         if (renderer_ == nullptr || !vertices.valid() || vertices.id >= vertex_buffers_.size()) return;
         const auto& data = vertex_buffers_[vertices.id];
         const std::size_t count = std::min(vertex_count, data.size());
@@ -61,7 +61,7 @@ public:
         }
     }
     void draw(const VertexBuffer& vertices, const IndexBuffer&, std::size_t vertex_count,
-              const Material& material) override { draw(vertices, vertex_count, material); }
+              const RenderMaterial& material) override { draw(vertices, vertex_count, material); }
     VertexBuffer create_vertex_buffer(std::span<const Vertex> vertices) override {
         vertex_buffers_.emplace_back(vertices.begin(), vertices.end());
         return {static_cast<std::uint16_t>(vertex_buffers_.size() - 1)};
@@ -145,7 +145,7 @@ public:
         view_projection_ = camera.view_projection();
         bgfx::setViewTransform(0, nullptr, view_projection_.data());
     }
-    void draw(const VertexBuffer& vertices, std::size_t vertex_count, const Material& material) override {
+    void draw(const VertexBuffer& vertices, std::size_t vertex_count, const RenderMaterial& material) override {
         if (!initialized_ || !vertices.valid() || !material.shader.valid()) return;
         bgfx::setVertexBuffer(0, vertex_buffers_[vertices.id]);
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS |
@@ -154,7 +154,7 @@ public:
         (void)vertex_count;
     }
     void draw(const VertexBuffer& vertices, const IndexBuffer& indices, std::size_t index_count,
-              const Material& material) override {
+              const RenderMaterial& material) override {
         if (!initialized_ || !vertices.valid() || !indices.valid() || !material.shader.valid()) return;
         bgfx::setVertexBuffer(0, vertex_buffers_[vertices.id]);
         bgfx::setIndexBuffer(index_buffers_[indices.id], 0, static_cast<std::uint32_t>(index_count));

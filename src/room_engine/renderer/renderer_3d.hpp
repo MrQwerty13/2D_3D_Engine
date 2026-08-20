@@ -22,7 +22,7 @@ struct Mesh {
 
 struct MeshAsset {
     std::vector<Mesh> meshes;
-    std::vector<Material> materials;
+    std::vector<RenderMaterial> materials;
     [[nodiscard]] bool valid() const noexcept { return !meshes.empty(); }
 };
 
@@ -68,14 +68,14 @@ struct RayHit {
 struct MeshInstance {
     Mesh mesh;
     Transform transform{};
-    Material material{};
+    RenderMaterial material{};
     std::uint64_t id = 0;
 };
 
 class Renderer3D {
 public:
     void begin() noexcept { instances_.clear(); }
-    void add_mesh(Mesh mesh, Transform transform = {}, Material material = {},
+    void add_mesh(Mesh mesh, Transform transform = {}, RenderMaterial material = {},
                   std::uint64_t id = 0);
     void add_asset(const MeshAsset& asset, Transform transform = {}, std::uint64_t id = 0);
     void set_ambient_light(AmbientLight light) noexcept { ambient_ = light; }

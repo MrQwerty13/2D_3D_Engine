@@ -1,4 +1,5 @@
 #include "room_engine/core/room_design.hpp"
+#include "room_engine/core/floor_plan_editor.hpp"
 
 #include <cassert>
 
@@ -63,5 +64,32 @@ void run_room_design_tests() {
         MemoryArchive archive;
         archive.write_string("room_design", "not a room design");
         assert(!deserialize(archive).has_value());
+    }
+    {
+        Room room;
+        room.id = "editor-room";
+        FloorPlanEditor editor(room);
+        assert(editor.draw_wall({0.03F, 0.02F}, {4.01F, 0.02F}));
+        assert(room.walls.size() == 1);
+        assert((room.walls[0].start == Point2{0.0F, 0.0F}));
+        assert((room.walls[0].end == Point2{4.0F, 0.0F}));
+        assert(editor.place_door(room.walls[0].id, 1.0F));
+        assert(editor.place_window(room.walls[0].id, 2.0F));
+        assert(editor.history().undo_count() == 3);
+        assert(editor.history().undo());
+        assert(room.windows.empty());
+        assert(editor.history().redo());
+        assert(room.windows.size() == 1);
+        assert(editor.select({3.8F, 0.05F}));
+        assert(editor.selection().type == EditorSelectionType::Wall);
+        assert(editor.move_endpoint(room.walls[0].id, false, {4.49F, 0.01F}));
+        assert((room.walls[0].end == Point2{4.5F, 0.0F}));
+        assert(editor.set_wall_length(room.walls[0].id, 5.0F));
+        assert((room.walls[0].end == Point2{5.0F, 0.0F}));
+        assert(editor.delete_selection());
+        assert(room.walls.empty());
+        assert(room.doors.empty());
+        assert(editor.history().undo());
+        assert(room.walls.size() == 1);
     }
 }

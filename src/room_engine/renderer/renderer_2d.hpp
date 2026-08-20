@@ -39,7 +39,7 @@ public:
     void draw_line(Line2D line, int layer = 0, std::uint64_t id = 0);
     void draw_polygon(std::span<const Vec2> points, Color color, int layer = 0,
                       std::uint64_t id = 0);
-    void flush(Renderer& renderer, const Material& material = {});
+    void flush(Renderer& renderer, const RenderMaterial& material = {});
     [[nodiscard]] std::optional<std::uint64_t> hit_test(ScreenPoint screen) const;
     [[nodiscard]] std::optional<std::uint64_t> select(ScreenPoint screen) noexcept;
     void clear_selection() noexcept { selected_id_.reset(); }

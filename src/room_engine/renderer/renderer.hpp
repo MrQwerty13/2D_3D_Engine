@@ -28,7 +28,7 @@ struct Texture { std::uint16_t id = 0; [[nodiscard]] bool valid() const noexcept
 
 enum class PrimitiveTopology { Lines, Triangles };
 
-struct Material {
+struct RenderMaterial {
     Color base_color{255, 255, 255, 255};
     float metallic = 0.0F;
     float roughness = 1.0F;
@@ -52,9 +52,9 @@ public:
     [[nodiscard]] virtual bool is_ready() const noexcept = 0;
     virtual bool begin_frame(Color clear_color) = 0;
     virtual void set_camera(const Camera& camera) = 0;
-    virtual void draw(const VertexBuffer& vertices, std::size_t vertex_count, const Material& material) = 0;
+    virtual void draw(const VertexBuffer& vertices, std::size_t vertex_count, const RenderMaterial& material) = 0;
     virtual void draw(const VertexBuffer& vertices, const IndexBuffer& indices, std::size_t index_count,
-                      const Material& material) = 0;
+                      const RenderMaterial& material) = 0;
     virtual VertexBuffer create_vertex_buffer(std::span<const Vertex> vertices) = 0;
     virtual IndexBuffer create_index_buffer(std::span<const std::uint16_t> indices) = 0;
     virtual Shader load_shader(std::span<const std::byte> vertex_binary,

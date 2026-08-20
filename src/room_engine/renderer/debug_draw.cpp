@@ -18,7 +18,7 @@ void DebugDraw::axes(float length) {
     line({}, {0.0F, 0.0F, length}, {60, 100, 240, 255});
 }
 
-void DebugDraw::flush(Renderer& renderer, const Material& material) {
+void DebugDraw::flush(Renderer& renderer, const RenderMaterial& material) {
     if (!vertices_.empty()) {
         const VertexBuffer buffer = renderer.create_vertex_buffer(vertices_);
         renderer.draw(buffer, vertices_.size(), material);

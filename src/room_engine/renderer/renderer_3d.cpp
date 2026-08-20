@@ -195,12 +195,12 @@ AssetLoadResult load_gltf(const std::filesystem::path& path) {
     return {std::move(result), {}};
 }
 
-void Renderer3D::add_mesh(Mesh mesh, Transform transform, Material material, std::uint64_t id) {
+void Renderer3D::add_mesh(Mesh mesh, Transform transform, RenderMaterial material, std::uint64_t id) {
     if (mesh.valid()) instances_.push_back({std::move(mesh), transform, material, id});
 }
 
 void Renderer3D::add_asset(const MeshAsset& asset, Transform transform, std::uint64_t id) {
-    for (std::size_t i = 0; i < asset.meshes.size(); ++i) add_mesh(asset.meshes[i], transform, i < asset.materials.size() ? asset.materials[i] : Material{}, id);
+    for (std::size_t i = 0; i < asset.meshes.size(); ++i) add_mesh(asset.meshes[i], transform, i < asset.materials.size() ? asset.materials[i] : RenderMaterial{}, id);
 }
 
 void Renderer3D::flush(Renderer& renderer, const Camera& camera) {
@@ -291,11 +291,11 @@ void populate_sample_room(Renderer3D& renderer) {
     renderer.set_ambient_light({{210, 220, 240, 255}, 0.35F});
     renderer.set_directional_light({{-0.5F, -1.0F, -0.35F}, {255, 244, 220, 255}, 0.8F});
     renderer.add_point_light({{0.0F, 2.6F, 0.0F}, {255, 235, 205, 255}, 1.2F, 8.0F});
-    renderer.add_mesh(make_room_floor(), {}, Material{{190, 190, 180, 255}, 0.0F, 0.9F}, 1);
-    renderer.add_mesh(make_room_wall(8.0F, 3.0F), {{0.0F, 0.0F, -3.0F}}, Material{{225, 225, 220, 255}}, 2);
-    renderer.add_mesh(make_room_wall(8.0F, 3.0F), {{0.0F, 0.0F, 3.0F}, Quaternion::from_axis_angle({0, 1, 0}, 3.14159265F)}, Material{{225, 225, 220, 255}}, 3);
-    renderer.add_mesh(make_room_wall(6.0F, 3.0F), {{-4.0F, 0.0F, 0.0F}, Quaternion::from_axis_angle({0, 1, 0}, 1.5707963F)}, Material{{215, 215, 210, 255}}, 4);
-    renderer.add_mesh(make_room_wall(6.0F, 3.0F), {{4.0F, 0.0F, 0.0F}, Quaternion::from_axis_angle({0, 1, 0}, -1.5707963F)}, Material{{215, 215, 210, 255}}, 5);
+    renderer.add_mesh(make_room_floor(), {}, RenderMaterial{{190, 190, 180, 255}, 0.0F, 0.9F}, 1);
+    renderer.add_mesh(make_room_wall(8.0F, 3.0F), {{0.0F, 0.0F, -3.0F}}, RenderMaterial{{225, 225, 220, 255}}, 2);
+    renderer.add_mesh(make_room_wall(8.0F, 3.0F), {{0.0F, 0.0F, 3.0F}, Quaternion::from_axis_angle({0, 1, 0}, 3.14159265F)}, RenderMaterial{{225, 225, 220, 255}}, 3);
+    renderer.add_mesh(make_room_wall(6.0F, 3.0F), {{-4.0F, 0.0F, 0.0F}, Quaternion::from_axis_angle({0, 1, 0}, 1.5707963F)}, RenderMaterial{{215, 215, 210, 255}}, 4);
+    renderer.add_mesh(make_room_wall(6.0F, 3.0F), {{4.0F, 0.0F, 0.0F}, Quaternion::from_axis_angle({0, 1, 0}, -1.5707963F)}, RenderMaterial{{215, 215, 210, 255}}, 5);
 }
 
 }  // namespace room_engine

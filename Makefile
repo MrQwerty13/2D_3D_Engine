@@ -41,7 +41,7 @@ BUILD_DIR := out/$(shell printf '%s' $(CONFIG) | tr '[:upper:]' '[:lower:]')
 CORE_SOURCES := src/room_engine/application.cpp src/room_engine/renderer/renderer.cpp src/room_engine/renderer/debug_draw.cpp src/room_engine/renderer/renderer_2d.cpp src/room_engine/renderer/renderer_3d.cpp
 APP_SOURCES := $(CORE_SOURCES) src/main.cpp
 TEST_SOURCES := src/room_engine/renderer/renderer.cpp src/room_engine/renderer/debug_draw.cpp src/room_engine/renderer/renderer_2d.cpp src/room_engine/renderer/renderer_3d.cpp tests/smoke_test.cpp tests/room_design_test.cpp
-FORMAT_SOURCES := $(APP_SOURCES) src/room_engine/application.hpp src/room_engine/core/room_design.hpp src/room_engine/renderer/renderer.hpp src/room_engine/renderer/camera.hpp src/room_engine/renderer/math.hpp src/room_engine/renderer/debug_draw.hpp src/room_engine/renderer/viewport.hpp src/room_engine/renderer/renderer_2d.hpp src/room_engine/renderer/renderer_2d.cpp src/room_engine/renderer/renderer_3d.hpp src/room_engine/renderer/renderer_3d.cpp tests/smoke_test.cpp tests/room_design_test.cpp
+FORMAT_SOURCES := $(APP_SOURCES) src/room_engine/application.hpp src/room_engine/core/room_design.hpp src/room_engine/core/floor_plan_editor.hpp src/room_engine/renderer/renderer.hpp src/room_engine/renderer/camera.hpp src/room_engine/renderer/math.hpp src/room_engine/renderer/debug_draw.hpp src/room_engine/renderer/viewport.hpp src/room_engine/renderer/renderer_2d.hpp src/room_engine/renderer/renderer_2d.cpp src/room_engine/renderer/renderer_3d.hpp src/room_engine/renderer/renderer_3d.cpp tests/smoke_test.cpp tests/room_design_test.cpp
 APP_OBJECTS := $(APP_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
 TEST_OBJECTS := $(TEST_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
 APP := $(BUILD_DIR)/room_engine_app

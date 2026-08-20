@@ -20,11 +20,11 @@ void Renderer2D::draw_circle(Circle2D c, int layer, std::uint64_t id) { items_.p
 void Renderer2D::draw_line(Line2D l, int layer, std::uint64_t id) { items_.push_back({DrawItem2D::Type::Line, layer, next_order_++, {{std::min(l.start.x,l.end.x),std::min(l.start.y,l.end.y)}, {std::max(l.start.x,l.end.x),std::max(l.start.y,l.end.y)}}, l.color, {}, {{l.start,l.end}}, 0, 2, id}); }
 void Renderer2D::draw_polygon(std::span<const Vec2> p, Color c, int layer, std::uint64_t id) { if (p.empty()) return; DrawItem2D item{DrawItem2D::Type::Polygon, layer, next_order_++, {}, c, {}, std::vector<Vec2>(p.begin(),p.end()), 0, 32, id}; item.bounds.min = item.bounds.max = item.points.front(); for (const auto point : item.points) { item.bounds.min.x=std::min(item.bounds.min.x,point.x); item.bounds.min.y=std::min(item.bounds.min.y,point.y); item.bounds.max.x=std::max(item.bounds.max.x,point.x); item.bounds.max.y=std::max(item.bounds.max.y,point.y); } items_.push_back(std::move(item)); }
 
-void Renderer2D::flush(Renderer& renderer, const Material& base_material) {
+void Renderer2D::flush(Renderer& renderer, const RenderMaterial& base_material) {
     std::stable_sort(items_.begin(), items_.end(), [](const auto& a, const auto& b) { return a.layer == b.layer ? a.order < b.order : a.layer < b.layer; });
     for (const auto& item : items_) {
         std::vector<Vertex> vertices;
-        Material material = base_material;
+        RenderMaterial material = base_material;
         material.base_color = item.color;
         material.base_color_texture = item.texture;
         if (item.type == DrawItem2D::Type::Line) {

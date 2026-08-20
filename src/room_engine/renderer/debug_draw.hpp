@@ -16,7 +16,7 @@ public:
     void grid(int half_extent, float spacing, Color color = {80, 80, 80, 255});
     void axes(float length = 2.0F);
     void clear() noexcept { vertices_.clear(); }
-    void flush(Renderer& renderer, const Material& material);
+    void flush(Renderer& renderer, const RenderMaterial& material);
 
 private:
     std::vector<Vertex> vertices_;

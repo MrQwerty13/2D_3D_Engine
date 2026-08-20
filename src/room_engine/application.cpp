@@ -38,9 +38,10 @@ bool Application::initialize() {
     return initialized_;
 }
 
-void Application::poll_events() {
+void Application::poll_events(const std::function<void(const SDL_Event&)>& handler) {
     SDL_Event event{};
     while (SDL_PollEvent(&event)) {
+        if (handler) handler(event);
         if (event.type == SDL_EVENT_QUIT) running_ = false;
     }
 }

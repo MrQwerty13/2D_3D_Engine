@@ -3,9 +3,11 @@
 #include "room_engine/renderer/renderer.hpp"
 
 #include <memory>
+#include <functional>
 #include <string_view>
 
 struct SDL_Window;
+union SDL_Event;
 
 namespace room_engine {
 
@@ -22,7 +24,7 @@ public:
 
     [[nodiscard]] bool initialize();
     [[nodiscard]] bool running() const noexcept { return running_; }
-    void poll_events();
+    void poll_events(const std::function<void(const SDL_Event&)>& handler = {});
     [[nodiscard]] bool begin_frame();
     void end_frame();
     void shutdown() noexcept;
