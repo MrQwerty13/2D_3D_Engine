@@ -150,6 +150,45 @@ The project will target:
 Build instructions will be added when the initial CMake project and dependency
 configuration are implemented.
 
+## Building the foundation
+
+The project uses CMake presets with Ninja and requires CMake 3.24 or newer.
+The default configuration fetches SDL3 release `3.2.0` through CMake
+`FetchContent`; SDL3 is the only external dependency in this foundation. The
+downloaded source is kept in CMake's dependency cache and is not committed to
+the repository.
+
+Debug build and tests:
+
+```sh
+cmake --preset debug
+cmake --build --preset debug
+ctest --preset debug
+```
+
+Release build and tests:
+
+```sh
+cmake --preset release
+cmake --build --preset release
+ctest --preset release
+```
+
+On macOS, install CMake and Ninja with Homebrew, then use Apple Clang. On
+Linux, install CMake, Ninja, and either GCC or Clang using the distribution's
+package manager. SDL3 can instead be supplied by a package manager or system
+installation by configuring with
+`-DROOM_ENGINE_FETCH_SDL3=OFF` and making its CMake package discoverable.
+
+The `format` target runs the repository's `.clang-format` configuration:
+
+```sh
+cmake --build build/debug --target format
+```
+
+The initial executable creates an SDL window and processes close events. It
+does not initialize bgfx or perform any rendering yet.
+
 ## License
 
 See [LICENSE](LICENSE).
