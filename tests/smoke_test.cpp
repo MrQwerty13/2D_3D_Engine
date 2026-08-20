@@ -9,6 +9,8 @@
 #include <cmath>
 #include <string_view>
 
+void run_room_design_tests();
+
 int main() {
     assert(room_engine::application_name() == std::string_view{"room_engine"});
 
@@ -65,6 +67,8 @@ int main() {
     room_engine::Renderer3D room;
     room_engine::populate_sample_room(room);
     assert(room.instances().size() == 5);
+
+    run_room_design_tests();
 
     return 0;
 }
