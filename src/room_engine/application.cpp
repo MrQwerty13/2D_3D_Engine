@@ -28,6 +28,7 @@ bool Application::initialize() {
     renderer_ = Renderer::create(window_, config_);
     initialized_ = renderer_ != nullptr && renderer_->is_ready();
     if (!initialized_) {
+        std::cerr << "Renderer initialization failed. Check the bgfx backend and SDL display.\n";
         renderer_.reset();
         SDL_DestroyWindow(window_);
         window_ = nullptr;

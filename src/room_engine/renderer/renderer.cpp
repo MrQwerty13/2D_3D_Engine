@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <optional>
 #include <utility>
 
-#if defined(ROOM_ENGINE_USE_BGFX)
 #include <SDL3/SDL.h>
+
+#if defined(ROOM_ENGINE_USE_BGFX)
 #include <bgfx/bgfx.h>
 #endif
 
@@ -15,12 +17,35 @@ namespace {
 
 class NullRenderer final : public Renderer {
 public:
-    bool is_ready() const noexcept override { return true; }
-    bool begin_frame(Color) override { return true; }
+    explicit NullRenderer(SDL_Window* window) : renderer_(SDL_CreateRenderer(window, nullptr)) {}
+    ~NullRenderer() override { if (renderer_ != nullptr) SDL_DestroyRenderer(renderer_); }
+
+    bool is_ready() const noexcept override { return renderer_ != nullptr; }
+    bool begin_frame(Color clear_color) override {
+        if (renderer_ == nullptr) return false;
+        SDL_SetRenderDrawColor(renderer_, clear_color.r, clear_color.g, clear_color.b, clear_color.a);
+        return SDL_RenderClear(renderer_);
+    }
     void set_camera(const Camera& camera) override { view_projection_ = camera.view_projection(); }
-    void draw(const VertexBuffer&, std::size_t, const Material&) override {}
-    void draw(const VertexBuffer&, const IndexBuffer&, std::size_t, const Material&) override {}
-    VertexBuffer create_vertex_buffer(std::span<const Vertex>) override { return {next_id_++}; }
+    void draw(const VertexBuffer& vertices, std::size_t vertex_count, const Material&) override {
+        if (renderer_ == nullptr || !vertices.valid() || vertices.id >= vertex_buffers_.size()) return;
+        const auto& data = vertex_buffers_[vertices.id];
+        const std::size_t count = std::min(vertex_count, data.size());
+        for (std::size_t i = 0; i + 1 < count; i += 2) {
+            const auto start = project(data[i]);
+            const auto end = project(data[i + 1]);
+            if (!start.has_value() || !end.has_value()) continue;
+            SDL_SetRenderDrawColor(renderer_, data[i].color.r, data[i].color.g,
+                                   data[i].color.b, data[i].color.a);
+            SDL_RenderLine(renderer_, start->first, start->second, end->first, end->second);
+        }
+    }
+    void draw(const VertexBuffer& vertices, const IndexBuffer&, std::size_t vertex_count,
+              const Material& material) override { draw(vertices, vertex_count, material); }
+    VertexBuffer create_vertex_buffer(std::span<const Vertex> vertices) override {
+        vertex_buffers_.emplace_back(vertices.begin(), vertices.end());
+        return {static_cast<std::uint16_t>(vertex_buffers_.size() - 1)};
+    }
     IndexBuffer create_index_buffer(std::span<const std::uint16_t>) override { return {next_id_++}; }
     Shader load_shader(std::span<const std::byte>, std::span<const std::byte>) override {
         return {next_id_++};
@@ -28,18 +53,35 @@ public:
     Texture create_texture(std::uint32_t, std::uint32_t, std::span<const std::byte>) override {
         return {next_id_++};
     }
-    void end_frame() override {}
+    void end_frame() override { if (renderer_ != nullptr) SDL_RenderPresent(renderer_); }
 
 private:
-    std::uint16_t next_id_ = 1;
+    [[nodiscard]] std::optional<std::pair<float, float>> project(const Vertex& vertex) const {
+        const auto& m = view_projection_.value;
+        const float x = m[0] * vertex.position.x + m[4] * vertex.position.y +
+                        m[8] * vertex.position.z + m[12];
+        const float y = m[1] * vertex.position.x + m[5] * vertex.position.y +
+                        m[9] * vertex.position.z + m[13];
+        const float w = m[3] * vertex.position.x + m[7] * vertex.position.y +
+                        m[11] * vertex.position.z + m[15];
+        if (w <= 0.0F) return std::nullopt;
+        int width = 0;
+        int height = 0;
+        SDL_GetRenderOutputSize(renderer_, &width, &height);
+        return std::pair{(x / w * 0.5F + 0.5F) * static_cast<float>(width),
+                         (1.0F - (y / w * 0.5F + 0.5F)) * static_cast<float>(height)};
+    }
+
+    SDL_Renderer* renderer_ = nullptr;
+    std::vector<std::vector<Vertex>> vertex_buffers_{{}};
     Mat4 view_projection_ = Mat4::identity();
+    std::uint16_t next_id_ = 1;
 };
 
 #if defined(ROOM_ENGINE_USE_BGFX)
 class BgfxRenderer final : public Renderer {
 public:
     explicit BgfxRenderer(SDL_Window* window, const RendererConfig& config) {
-        bgfx::renderFrame();
         bgfx::Init init;
         init.type = bgfx::RendererType::Count;
         init.resolution.width = config.width;
@@ -163,7 +205,7 @@ std::unique_ptr<Renderer> Renderer::create(SDL_Window* window, const RendererCon
 #else
     (void)window;
     (void)config;
-    return std::make_unique<NullRenderer>();
+    return std::make_unique<NullRenderer>(window);
 #endif
 }
 
