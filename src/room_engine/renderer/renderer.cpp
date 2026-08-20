@@ -149,7 +149,7 @@ public:
         if (!initialized_ || !vertices.valid() || !material.shader.valid()) return;
         bgfx::setVertexBuffer(0, vertex_buffers_[vertices.id]);
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS |
-                       BGFX_STATE_MSAA);
+                       BGFX_STATE_MSAA | (material.double_sided ? 0U : BGFX_STATE_CULL_CW));
         bgfx::submit(0, shaders_[material.shader.id]);
         (void)vertex_count;
     }
@@ -159,7 +159,7 @@ public:
         bgfx::setVertexBuffer(0, vertex_buffers_[vertices.id]);
         bgfx::setIndexBuffer(index_buffers_[indices.id], 0, static_cast<std::uint32_t>(index_count));
         bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS |
-                       BGFX_STATE_MSAA);
+                       BGFX_STATE_MSAA | (material.double_sided ? 0U : BGFX_STATE_CULL_CW));
         bgfx::submit(0, shaders_[material.shader.id]);
     }
     VertexBuffer create_vertex_buffer(std::span<const Vertex> vertices) override {
@@ -204,7 +204,8 @@ private:
         if (!initialized) {
             layout.begin().add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
                 .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
-                .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float).end();
+                .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+                .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float).end();
             initialized = true;
         }
         return layout;

@@ -3,6 +3,7 @@
 #include "room_engine/core/transform.hpp"
 #include "room_engine/renderer/viewport.hpp"
 #include "room_engine/renderer/renderer_2d.hpp"
+#include "room_engine/renderer/renderer_3d.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -45,6 +46,25 @@ int main() {
     scene.draw_rect({{9.0F, -5.0F}, {13.0F, -1.0F}}, {255, 255, 255, 255}, 0, 42);
     assert(scene.select(viewport.world_to_screen({11.0F, -3.0F})).value() == 42);
     assert(scene.selected().value() == 42);
+
+    room_engine::PerspectiveCamera camera;
+    camera.position = {0.0F, 0.0F, 5.0F};
+    camera.target = {0.0F, 0.0F, 0.0F};
+    room_engine::Renderer3D scene_3d;
+    room_engine::Mesh triangle;
+    triangle.vertices = {{{-1.0F, -1.0F, 0.0F}}, {{1.0F, -1.0F, 0.0F}}, {{0.0F, 1.0F, 0.0F}}};
+    triangle.indices = {0, 1, 2};
+    scene_3d.add_mesh(triangle, {}, {}, 99);
+    const auto hit = scene_3d.raycast({400.0F, 300.0F}, camera, 800.0F, 600.0F);
+    assert(hit.has_value());
+    assert(hit->id == 99);
+    assert(scene_3d.select({400.0F, 300.0F}, camera, 800.0F, 600.0F).value() == 99);
+    assert(!room_engine::load_gltf("assets/does-not-exist.glb"));
+    assert(!room_engine::load_gltf("tests/fixtures/invalid.gltf"));
+
+    room_engine::Renderer3D room;
+    room_engine::populate_sample_room(room);
+    assert(room.instances().size() == 5);
 
     return 0;
 }

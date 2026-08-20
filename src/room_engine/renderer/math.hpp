@@ -32,6 +32,55 @@ struct Mat4 {
     }
 };
 
+[[nodiscard]] inline float dot(Vec3 a, Vec3 b) noexcept {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+[[nodiscard]] inline Vec3 cross(Vec3 a, Vec3 b) noexcept {
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z,
+            a.x * b.y - a.y * b.x};
+}
+
+[[nodiscard]] inline float length(Vec3 value) noexcept { return std::sqrt(dot(value, value)); }
+
+[[nodiscard]] inline Vec3 normalize(Vec3 value) noexcept {
+    const float magnitude = length(value);
+    return magnitude > 0.000001F ? value * (1.0F / magnitude) : Vec3{};
+}
+
+[[nodiscard]] inline Mat4 transform_matrix(const Transform& transform) noexcept {
+    const Quaternion& q = transform.rotation;
+    const float xx = q.x * q.x;
+    const float yy = q.y * q.y;
+    const float zz = q.z * q.z;
+    const float xy = q.x * q.y;
+    const float xz = q.x * q.z;
+    const float yz = q.y * q.z;
+    const float wx = q.w * q.x;
+    const float wy = q.w * q.y;
+    const float wz = q.w * q.z;
+    Mat4 result = Mat4::identity();
+    result.value[0] = (1.0F - 2.0F * (yy + zz)) * transform.scale.x;
+    result.value[1] = (2.0F * (xy + wz)) * transform.scale.x;
+    result.value[2] = (2.0F * (xz - wy)) * transform.scale.x;
+    result.value[4] = (2.0F * (xy - wz)) * transform.scale.y;
+    result.value[5] = (1.0F - 2.0F * (xx + zz)) * transform.scale.y;
+    result.value[6] = (2.0F * (yz + wx)) * transform.scale.y;
+    result.value[8] = (2.0F * (xz + wy)) * transform.scale.z;
+    result.value[9] = (2.0F * (yz - wx)) * transform.scale.z;
+    result.value[10] = (1.0F - 2.0F * (xx + yy)) * transform.scale.z;
+    result.value[12] = transform.position.x;
+    result.value[13] = transform.position.y;
+    result.value[14] = transform.position.z;
+    return result;
+}
+
+[[nodiscard]] inline Vec3 transform_point(const Mat4& matrix, Vec3 point) noexcept {
+    return {matrix.value[0] * point.x + matrix.value[4] * point.y + matrix.value[8] * point.z + matrix.value[12],
+            matrix.value[1] * point.x + matrix.value[5] * point.y + matrix.value[9] * point.z + matrix.value[13],
+            matrix.value[2] * point.x + matrix.value[6] * point.y + matrix.value[10] * point.z + matrix.value[14]};
+}
+
 [[nodiscard]] inline Mat4 translation(Vec3 position) noexcept {
     Mat4 result = Mat4::identity();
     result.value[12] = position.x;
