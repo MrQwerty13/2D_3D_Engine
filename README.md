@@ -52,7 +52,8 @@ and serialization consistent across both views.
 ## Technology stack
 
 - **C++20** — engine and application code
-- **CMake** — build system
+- **Make** — build system
+- **Clang++** — the project compiler
 - **SDL3** — windowing, input, audio, and platform integration
 - **bgfx** — cross-platform rendering abstraction
 - **Metal** — macOS graphics backend
@@ -119,7 +120,7 @@ third_party/   External dependencies
 Development is divided into the following phases:
 
 1. Product definition
-2. CMake and platform foundation
+2. Make and platform foundation
 3. Engine core
 4. Rendering foundation
 5. 2D engine
@@ -142,48 +143,39 @@ the engine phase by phase.
 
 The project will target:
 
-- macOS with Clang and CMake
-- Linux with Clang or GCC and CMake
+- macOS with Clang++
+- Linux with Clang++
 - Debug and Release builds
 - Unit tests for math, geometry, snapping, validation, and serialization
 
-Build instructions will be added when the initial CMake project and dependency
-configuration are implemented.
+SDL3 must be installed and discoverable through `pkg-config`.
 
 ## Building the foundation
 
-The project uses CMake presets with Ninja and requires CMake 3.24 or newer.
-The default configuration fetches SDL3 release `3.2.0` through CMake
-`FetchContent`; SDL3 is the only external dependency in this foundation. The
-downloaded source is kept in CMake's dependency cache and is not committed to
-the repository.
+The project uses a Makefile and always compiles with `clang++`. SDL3 is the
+only external dependency in this foundation and must be installed separately.
 
 Debug build and tests:
 
 ```sh
-cmake --preset debug
-cmake --build --preset debug
-ctest --preset debug
+make debug
+make test
 ```
 
 Release build and tests:
 
 ```sh
-cmake --preset release
-cmake --build --preset release
-ctest --preset release
+make release
 ```
 
-On macOS, install CMake and Ninja with Homebrew, then use Apple Clang. On
-Linux, install CMake, Ninja, and either GCC or Clang using the distribution's
-package manager. SDL3 can instead be supplied by a package manager or system
-installation by configuring with
-`-DROOM_ENGINE_FETCH_SDL3=OFF` and making its CMake package discoverable.
+On macOS, install LLVM/Apple Clang and SDL3 with Homebrew. On Linux, install
+Clang, Make, SDL3, and the SDL3 development package using the distribution's
+package manager. Verify that `pkg-config --modversion sdl3` succeeds.
 
 The `format` target runs the repository's `.clang-format` configuration:
 
 ```sh
-cmake --build build/debug --target format
+make format
 ```
 
 The initial executable creates an SDL window and processes close events. It
