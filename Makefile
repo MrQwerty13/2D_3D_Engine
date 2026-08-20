@@ -29,6 +29,10 @@ SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(SDL3_PKG) 2>/dev/null)
 SDL_LIBS := $(shell $(PKG_CONFIG) --libs $(SDL3_PKG) 2>/dev/null)
 BGFX_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags bgfx 2>/dev/null)
 BGFX_LIBS ?= $(shell $(PKG_CONFIG) --libs bgfx 2>/dev/null)
+BGFX_PLATFORM_LIBS :=
+ifeq ($(shell uname -s),Darwin)
+BGFX_PLATFORM_LIBS += -framework Metal -framework QuartzCore -framework Cocoa -framework IOKit -framework CoreMedia -framework VideoToolbox
+endif
 ifneq ($(strip $(BGFX_CFLAGS)$(BGFX_LIBS)),)
 CPPFLAGS += -DROOM_ENGINE_USE_BGFX $(BGFX_CFLAGS)
 endif
@@ -57,11 +61,11 @@ build: verify-tools verify-sdl $(APP) $(TEST)
 
 $(APP): $(APP_OBJECTS)
 	@mkdir -p $(@D)
-	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(LDLIBS) -o $@
+	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
 
 $(TEST): $(TEST_OBJECTS)
 	@mkdir -p $(@D)
-	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
+	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
 
 $(BUILD_DIR)/%.o: %.cpp
 	@mkdir -p $(@D)

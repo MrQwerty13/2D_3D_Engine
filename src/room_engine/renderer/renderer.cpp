@@ -8,7 +8,6 @@
 #if defined(ROOM_ENGINE_USE_BGFX)
 #include <SDL3/SDL.h>
 #include <bgfx/bgfx.h>
-#include <bgfx/platform.h>
 #endif
 
 namespace room_engine {
@@ -52,7 +51,7 @@ public:
             return;
         }
         initialized_ = true;
-        bgfx::setViewRect(0, 0, static_cast<std::uint16_t>(config.width),
+        bgfx::setViewRect(0, 0, 0, static_cast<std::uint16_t>(config.width),
                           static_cast<std::uint16_t>(config.height));
     }
 
@@ -148,11 +147,11 @@ private:
 
     bool initialized_ = false;
     Mat4 view_projection_ = Mat4::identity();
-    std::vector<bgfx::VertexBufferHandle> vertex_buffers_{{BGFX_INVALID_HANDLE}};
-    std::vector<bgfx::IndexBufferHandle> index_buffers_{{BGFX_INVALID_HANDLE}};
-    std::vector<bgfx::ProgramHandle> shaders_{{BGFX_INVALID_HANDLE}};
+    std::vector<bgfx::VertexBufferHandle> vertex_buffers_{{bgfx::kInvalidHandle}};
+    std::vector<bgfx::IndexBufferHandle> index_buffers_{{bgfx::kInvalidHandle}};
+    std::vector<bgfx::ProgramHandle> shaders_{{bgfx::kInvalidHandle}};
     std::vector<bgfx::ProgramHandle> programs_;
-    std::vector<bgfx::TextureHandle> textures_{{BGFX_INVALID_HANDLE}};
+    std::vector<bgfx::TextureHandle> textures_{{bgfx::kInvalidHandle}};
 };
 #endif
 
