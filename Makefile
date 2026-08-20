@@ -63,7 +63,7 @@ $(BUILD_DIR)/%.o: %.cpp
 	$(CXX) $(CONFIG_FLAGS) $(CPPFLAGS) $(CXXFLAGS) $(DEPFLAGS) $(SDL_CFLAGS) -c $< -o $@
 
 test: CONFIG=Debug
-test: build
+test: $(TEST)
 	$(TEST)
 
 check: test format-check
