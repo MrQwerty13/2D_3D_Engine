@@ -1,6 +1,7 @@
 #include "room_engine/core/room_design.hpp"
 #include "room_engine/core/floor_plan_editor.hpp"
 #include "room_engine/renderer/renderer_3d.hpp"
+#include "room_engine/core/presentation.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -68,12 +69,12 @@ void run_room_design_tests() {
         const RoomDesign design = valid_design();
         Renderer3D scene;
         assert(scene.update_from_room(design, "room-1"));
-        assert(scene.instances().size() == 5);
+        assert(scene.instances().size() == 6);
         assert(scene.instances()[0].material.base_color.r == 204);
         RoomDesign invalid = design;
         invalid.rooms[0].walls[0].thickness = 0.0F;
         assert(!scene.update_from_room(invalid, "room-1"));
-        assert(scene.instances().size() == 5);
+        assert(scene.instances().size() == 6);
     }
     {
         RoomDesign design = valid_design();
@@ -113,6 +114,20 @@ void run_room_design_tests() {
         MemoryArchive archive;
         archive.write_string("room_design", "not a room design");
         assert(!deserialize(archive).has_value());
+    }
+    {
+        const RoomDesign original = valid_design();
+        const auto json = std::filesystem::path{"/private/tmp/room_engine_test.room.json"};
+        const auto glb = std::filesystem::path{"/private/tmp/room_engine_test.glb"};
+        const auto svg = std::filesystem::path{"/private/tmp/room_engine_test.svg"};
+        assert(export_project_json(original, json));
+        RoomDesign imported;
+        assert(import_project_json(json, imported));
+        assert(imported.rooms[0].furniture.size() == 1);
+        assert(export_room_glb(original, glb, "room-1"));
+        assert(load_gltf(glb));
+        assert(export_floor_plan_svg(original, svg, "room-1"));
+        std::filesystem::remove(json); std::filesystem::remove(glb); std::filesystem::remove(svg);
     }
     {
         Room room;

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -83,6 +84,26 @@ public:
         return {static_cast<std::uint16_t>(textures_.size() - 1)};
     }
     void end_frame() override { if (renderer_ != nullptr) SDL_RenderPresent(renderer_); }
+    bool save_screenshot(const std::filesystem::path& path) override {
+        if (renderer_ == nullptr) return false;
+        int width = 0; int height = 0;
+        if (!SDL_GetRenderOutputSize(renderer_, &width, &height) || width <= 0 || height <= 0) return false;
+        SDL_Surface* captured = SDL_RenderReadPixels(renderer_, nullptr);
+        if (captured == nullptr) return false;
+        SDL_Surface* rgba = SDL_ConvertSurface(captured, SDL_PIXELFORMAT_RGBA32);
+        SDL_DestroySurface(captured);
+        if (rgba == nullptr) return false;
+        std::ofstream file(path, std::ios::binary);
+        if (!file) { SDL_DestroySurface(rgba); return false; }
+        file << "P6\n" << width << ' ' << height << "\n255\n";
+        const auto* pixels = static_cast<const std::uint8_t*>(rgba->pixels);
+        for (int y = 0; y < rgba->h; ++y) {
+            const auto* row = pixels + static_cast<std::size_t>(y) * static_cast<std::size_t>(rgba->pitch);
+            for (int x = 0; x < rgba->w; ++x) file.write(reinterpret_cast<const char*>(row + static_cast<std::size_t>(x) * 4U), 3);
+        }
+        SDL_DestroySurface(rgba);
+        return static_cast<bool>(file);
+    }
 
 private:
     [[nodiscard]] SDL_Texture* texture(Texture handle) const noexcept {

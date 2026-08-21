@@ -283,7 +283,7 @@ void Renderer3D::flush(Renderer& renderer, const Camera& camera) {
             float illumination = ambient_.intensity;
             const Vec3 light_direction = normalize(directional_.direction * -1.0F);
             illumination += std::max(0.0F, dot(vertex.normal, light_direction)) * directional_.intensity;
-            for (const auto& point : points_) {
+            if (controls_.enable_point_lights) for (const auto& point : points_) {
                 const Vec3 to_light = point.position - vertex.position;
                 const float distance = length(to_light);
                 if (distance < point.range && distance > 0.000001F) {
@@ -291,8 +291,8 @@ void Renderer3D::flush(Renderer& renderer, const Camera& camera) {
                     illumination += std::max(0.0F, dot(vertex.normal, to_light * (1.0F / distance))) * point.intensity * attenuation;
                 }
             }
-            const auto shade = [illumination](std::uint8_t channel) {
-                return static_cast<std::uint8_t>(std::clamp(illumination * static_cast<float>(channel), 0.0F, 255.0F));
+            const auto shade = [illumination, this](std::uint8_t channel) {
+                return static_cast<std::uint8_t>(std::clamp(illumination * controls_.exposure * static_cast<float>(channel), 0.0F, 255.0F));
             };
             vertex.color = {shade(instance.material.base_color.r), shade(instance.material.base_color.g),
                             shade(instance.material.base_color.b), instance.material.base_color.a};
@@ -432,6 +432,12 @@ bool populate_room(Renderer3D& renderer, const RoomDesign& design, const StableI
     }
     if (room.floor) renderer.add_mesh(make_room_floor(*room.floor), {}, render_material(material_for(room.floor->material_id)), scene_id(room.floor->id));
     if (room.ceiling) renderer.add_mesh(make_room_ceiling(*room.ceiling), {}, render_material(material_for(room.ceiling->material_id)), scene_id(room.ceiling->id));
+    for (const auto& item : room.furniture) {
+        Transform transform = item.transform;
+        transform.position.y -= item.dimensions.y * 0.5F;
+        renderer.add_mesh(make_room_opening(item.dimensions.x, item.dimensions.y, item.dimensions.z), transform,
+                          render_material(material_for(item.material_id)), scene_id(item.id));
+    }
     return true;
 }
 

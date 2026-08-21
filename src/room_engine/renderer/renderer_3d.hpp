@@ -74,6 +74,11 @@ struct AmbientLight {
     float intensity = 0.25F;
 };
 
+struct PresentationControls {
+    float exposure = 1.0F;
+    bool enable_point_lights = true;
+};
+
 struct Ray {
     Vec3 origin{};
     Vec3 direction{0.0F, 0.0F, -1.0F};
@@ -103,6 +108,8 @@ public:
     void set_directional_light(DirectionalLight light) noexcept { directional_ = light; }
     void add_point_light(PointLight light) { points_.push_back(light); }
     void clear_lights() noexcept { points_.clear(); }
+    void set_presentation_controls(PresentationControls controls) noexcept { controls_ = controls; }
+    [[nodiscard]] PresentationControls presentation_controls() const noexcept { return controls_; }
     // Rebuilds the scene only when the validated 2D design contains the requested room.
     [[nodiscard]] bool update_from_room(const RoomDesign& design, const StableId& room_id = {});
     void flush(Renderer& renderer, const Camera& camera);
@@ -119,6 +126,7 @@ private:
     AmbientLight ambient_{};
     DirectionalLight directional_{};
     std::vector<PointLight> points_;
+    PresentationControls controls_{};
 };
 
 [[nodiscard]] Mesh make_room_floor(float width = 8.0F, float depth = 6.0F);

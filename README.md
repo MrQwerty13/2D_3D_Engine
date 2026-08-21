@@ -9,8 +9,8 @@ of rooms, walls, doors, windows, materials, and furniture.
 
 ## Project status
 
-This repository is currently in the planning and foundation stage. The first
-target is a small end-to-end vertical slice:
+The repository now contains the first end-to-end vertical slice plus
+presentation/export and profiling tooling:
 
 1. Create a rectangular room.
 2. Render the room in 3D.
@@ -18,6 +18,7 @@ target is a small end-to-end vertical slice:
 4. Update the 3D geometry immediately.
 5. Place and move one furniture object.
 6. Save and reload the project.
+7. Export project JSON, basic GLB geometry, SVG floor plans, and null-backend screenshots.
 
 ## Design direction
 
@@ -138,6 +139,11 @@ See [TECHSTACK.md](TECHSTACK.md) for the technology and architecture decisions.
 
 See [PROMTS_FOR_AI.md](PROMTS_FOR_AI.md) for prompts that can be used to develop
 the engine phase by phase.
+
+Presentation and release notes are in [docs/GLB_LIMITATIONS.md](docs/GLB_LIMITATIONS.md),
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md), and
+[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). Use `make CONFIG=Release profile`
+to measure procedural build time and project size for 100–300 furniture objects.
 
 ## Initial development requirements
 

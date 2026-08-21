@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <filesystem>
 #include <span>
 #include <string>
 #include <vector>
@@ -62,6 +63,9 @@ public:
     virtual Texture create_texture(std::uint32_t width, std::uint32_t height,
                                    std::span<const std::byte> rgba8) = 0;
     virtual void end_frame() = 0;
+    // Captures the currently presented frame when the backend supports readback.
+    // The export layer can report false for GPU backends without a readback path.
+    [[nodiscard]] virtual bool save_screenshot(const std::filesystem::path&) { return false; }
 };
 
 }  // namespace room_engine
