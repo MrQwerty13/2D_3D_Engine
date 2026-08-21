@@ -1,6 +1,7 @@
 #include "room_engine/application.hpp"
 #include "room_engine/core/floor_plan_editor.hpp"
 #include "room_engine/renderer/renderer_2d.hpp"
+#include "room_engine/renderer/renderer_3d.hpp"
 
 #include <SDL3/SDL.h>
 
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <string>
 
@@ -16,6 +18,11 @@ int main() {
     if (!application.initialize()) return 1;
     room_engine::Viewport2D viewport{1280.0F, 720.0F};
     room_engine::Renderer2D scene{viewport};
+    room_engine::Renderer3D scene_3d;
+    room_engine::PerspectiveCamera camera_3d;
+    camera_3d.position = {7.0F, 5.5F, 8.0F};
+    camera_3d.target = {0.0F, 1.0F, 0.0F};
+    bool view_3d = false;
     room_engine::Room room;
     room.id = "room-1";
     room.name = "New room";
@@ -31,6 +38,7 @@ int main() {
                 if (event.key.key == SDLK_DELETE || event.key.key == SDLK_BACKSPACE) editor.delete_selection();
                 if (event.key.key == SDLK_Z && (event.key.mod & SDL_KMOD_CTRL)) editor.history().undo();
                 if (event.key.key == SDLK_Y && (event.key.mod & SDL_KMOD_CTRL)) editor.history().redo();
+                if (event.key.key == SDLK_3) view_3d = !view_3d;
                 if (event.key.key == SDLK_D) { placing_door = true; placing_window = false; }
                 if (event.key.key == SDLK_W) { placing_window = true; placing_door = false; }
             }
@@ -52,8 +60,28 @@ int main() {
             }
         });
         if (application.begin_frame()) {
-            application.renderer()->set_camera(viewport.camera());
-            scene.begin();
+            if (view_3d) {
+                room_engine::RoomDesign design;
+                room_engine::Room rendered_room = room;
+                if (!rendered_room.walls.empty()) {
+                    float min_x = std::numeric_limits<float>::max();
+                    float min_z = std::numeric_limits<float>::max();
+                    float max_x = std::numeric_limits<float>::lowest();
+                    float max_z = std::numeric_limits<float>::lowest();
+                    for (const auto& wall : rendered_room.walls) {
+                        min_x = std::min({min_x, wall.start.x, wall.end.x});
+                        min_z = std::min({min_z, wall.start.y, wall.end.y});
+                        max_x = std::max({max_x, wall.start.x, wall.end.x});
+                        max_z = std::max({max_z, wall.start.y, wall.end.y});
+                    }
+                    rendered_room.floor = room_engine::Floor{"preview-floor", {{min_x, min_z}, {max_x, min_z}, {max_x, max_z}, {min_x, max_z}}, 0.0F, {}};
+                }
+                design.rooms.push_back(std::move(rendered_room));
+                static_cast<void>(scene_3d.update_from_room(design, room.id));
+                scene_3d.flush(*application.renderer(), camera_3d);
+            } else {
+                application.renderer()->set_camera(viewport.camera());
+                scene.begin();
             for (int i = -10; i <= 10; ++i) {
                 const float coordinate = static_cast<float>(i);
                 scene.draw_line({{coordinate, -7.0F}, {coordinate, 7.0F}, {45, 50, 62, 255}}, -10);
@@ -74,7 +102,8 @@ int main() {
                     scene.draw_line({{a.x, a.y}, {b.x, b.y}, {245, 180, 80, 255}, 0.08F}, 2);
                 }
             }
-            scene.flush(*application.renderer(), material);
+                scene.flush(*application.renderer(), material);
+            }
             application.end_frame();
         }
         SDL_Delay(16);

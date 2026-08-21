@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -26,6 +27,7 @@ public:
     bool is_ready() const noexcept override { return renderer_ != nullptr; }
     bool begin_frame(Color clear_color) override {
         if (renderer_ == nullptr) return false;
+        vertex_buffers_.resize(1);
         SDL_SetRenderDrawColor(renderer_, clear_color.r, clear_color.g, clear_color.b, clear_color.a);
         return SDL_RenderClear(renderer_);
     }
@@ -133,6 +135,10 @@ public:
     bool is_ready() const noexcept override { return initialized_; }
     bool begin_frame(Color clear_color) override {
         if (!initialized_) return false;
+        for (std::size_t i = 1; i < vertex_buffers_.size(); ++i) if (bgfx::isValid(vertex_buffers_[i])) bgfx::destroy(vertex_buffers_[i]);
+        for (std::size_t i = 1; i < index_buffers_.size(); ++i) if (bgfx::isValid(index_buffers_[i])) bgfx::destroy(index_buffers_[i]);
+        vertex_buffers_.resize(1);
+        index_buffers_.resize(1);
         const std::uint32_t rgba = (static_cast<std::uint32_t>(clear_color.r) << 24U) |
                                    (static_cast<std::uint32_t>(clear_color.g) << 16U) |
                                    (static_cast<std::uint32_t>(clear_color.b) << 8U) |
@@ -163,6 +169,7 @@ public:
         bgfx::submit(0, shaders_[material.shader.id]);
     }
     VertexBuffer create_vertex_buffer(std::span<const Vertex> vertices) override {
+        if (vertex_buffers_.size() >= static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max())) return {};
         const auto handle = static_cast<std::uint16_t>(vertex_buffers_.size());
         vertex_buffers_.push_back(bgfx::createVertexBuffer(bgfx::copy(vertices.data(),
                                                                       static_cast<std::uint32_t>(vertices.size_bytes())),
@@ -170,6 +177,7 @@ public:
         return {handle};
     }
     IndexBuffer create_index_buffer(std::span<const std::uint16_t> indices) override {
+        if (index_buffers_.size() >= static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max())) return {};
         const auto handle = static_cast<std::uint16_t>(index_buffers_.size());
         index_buffers_.push_back(bgfx::createIndexBuffer(bgfx::copy(indices.data(),
                                                                       static_cast<std::uint32_t>(indices.size_bytes()))));
