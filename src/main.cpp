@@ -35,9 +35,14 @@ int main() {
         application.poll_events([&](const SDL_Event& event) {
             if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
                 if (event.key.key == SDLK_ESCAPE) { wall_start.reset(); placing_door = false; placing_window = false; }
-                if (event.key.key == SDLK_DELETE || event.key.key == SDLK_BACKSPACE) editor.delete_selection();
-                if (event.key.key == SDLK_Z && (event.key.mod & SDL_KMOD_CTRL)) editor.history().undo();
-                if (event.key.key == SDLK_Y && (event.key.mod & SDL_KMOD_CTRL)) editor.history().redo();
+                if (event.key.key == SDLK_DELETE || event.key.key == SDLK_BACKSPACE) editor.handle_shortcut(room_engine::EditorKey::Delete);
+                if (event.key.key == SDLK_Z && (event.key.mod & SDL_KMOD_CTRL)) editor.handle_shortcut((event.key.mod & SDL_KMOD_SHIFT) ? room_engine::EditorKey::Redo : room_engine::EditorKey::Undo);
+                if (event.key.key == SDLK_Y && (event.key.mod & SDL_KMOD_CTRL)) editor.handle_shortcut(room_engine::EditorKey::Redo);
+                if (event.key.key == SDLK_C && (event.key.mod & SDL_KMOD_CTRL)) editor.handle_shortcut(room_engine::EditorKey::Copy);
+                if (event.key.key == SDLK_V && (event.key.mod & SDL_KMOD_CTRL)) editor.handle_shortcut(room_engine::EditorKey::Paste);
+                if (event.key.key == SDLK_D && (event.key.mod & SDL_KMOD_CTRL)) editor.handle_shortcut(room_engine::EditorKey::Duplicate);
+                if (event.key.key == SDLK_A && (event.key.mod & SDL_KMOD_CTRL)) editor.handle_shortcut(room_engine::EditorKey::SelectAll);
+                if (event.key.key == SDLK_S && (event.key.mod & SDL_KMOD_CTRL)) editor.handle_shortcut(room_engine::EditorKey::Save);
                 if (event.key.key == SDLK_3) view_3d = !view_3d;
                 if (event.key.key == SDLK_D) { placing_door = true; placing_window = false; }
                 if (event.key.key == SDLK_W) { placing_window = true; placing_door = false; }

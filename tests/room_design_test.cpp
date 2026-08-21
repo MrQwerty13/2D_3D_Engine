@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cmath>
 #include <limits>
+#include <filesystem>
 
 using namespace room_engine;
 
@@ -139,5 +140,49 @@ void run_room_design_tests() {
         assert(room.doors.empty());
         assert(editor.history().undo());
         assert(room.walls.size() == 1);
+    }
+    {
+        Room room;
+        room.id = "command-room";
+        FloorPlanEditor editor(room);
+        assert(editor.draw_wall({0.0F, 0.0F}, {4.0F, 0.0F}));
+        const auto wall_id = room.walls.front().id;
+        assert(editor.set_wall_properties(wall_id, 0.3F, 3.0F));
+        assert(editor.place_door(wall_id, 1.0F));
+        const auto door_id = room.doors.front().id;
+        assert(editor.set_opening_properties(door_id, 1.0F, 0.0F, 2.0F));
+        assert(editor.select({2.0F, 0.05F}, false));
+        assert(editor.toggle_lock(wall_id));
+        assert(!editor.move_endpoint(wall_id, false, {5.0F, 0.0F}));
+        assert(editor.toggle_lock(wall_id));
+        assert(editor.copy_selection());
+        assert(editor.handle_shortcut(EditorKey::Duplicate));
+        assert(room.walls.size() == 2);
+        assert(editor.history().undo());
+        assert(room.walls.size() == 1);
+        assert(editor.history().redo());
+        assert(room.walls.size() == 2);
+        assert(editor.toggle_visibility(room.walls.back().id));
+        assert(!editor.is_visible(room.walls.back().id));
+        assert(editor.history().undo());
+        assert(editor.is_visible(room.walls.back().id));
+        for (std::size_t i = 0; i < editor.history().undo_count(); ++i) {
+            const auto* command = editor.history().command(i);
+            assert(command != nullptr);
+            MemoryArchive archive;
+            assert(command->serialize(archive, "command"));
+            assert(!archive.read_string("command.name").empty());
+        }
+        const auto path = std::filesystem::path{"/private/tmp/room_engine_command_test.room"};
+        assert(editor.save_project(path));
+        Room loaded_room;
+        FloorPlanEditor loaded(loaded_room);
+        assert(loaded.open_project(path));
+        assert(loaded.room().walls.size() == room.walls.size());
+        assert(loaded.room().walls[0].thickness == room.walls[0].thickness);
+        std::filesystem::remove(path);
+        MemoryArchive malformed;
+        malformed.write_string("room_design", "1 0 1 \"room\" 1 \"wall\"");
+        assert(!deserialize(malformed).has_value());
     }
 }

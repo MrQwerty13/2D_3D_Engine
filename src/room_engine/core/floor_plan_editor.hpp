@@ -4,22 +4,32 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <cstddef>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace room_engine {
 
-enum class EditorSelectionType { None, Wall, Door, Window };
+enum class EditorSelectionType { None, Wall, Door, Window, Furniture };
 struct EditorSelection {
     EditorSelectionType type = EditorSelectionType::None;
     StableId id;
     friend bool operator==(const EditorSelection&, const EditorSelection&) = default;
 };
+
+using EditorSelectionSet = std::vector<EditorSelection>;
+
+enum class EditorKey { Undo, Redo, Copy, Paste, Duplicate, Delete, SelectAll, ToggleLock, ToggleVisibility, Save };
 
 struct SnapSettings {
     bool grid = true;
@@ -37,6 +47,11 @@ public:
     virtual void redo() = 0;
     virtual void undo() = 0;
     [[nodiscard]] virtual std::string name() const = 0;
+    // Commands are inspectable and persistable without exposing implementation details.
+    virtual bool serialize(ISerializer& archive, std::string_view key) const {
+        archive.write_string(key, name());
+        return true;
+    }
 };
 
 class CommandHistory {
@@ -63,6 +78,12 @@ public:
     [[nodiscard]] std::size_t undo_count() const noexcept { return cursor_; }
     [[nodiscard]] std::size_t redo_count() const noexcept { return commands_.size() - cursor_; }
     [[nodiscard]] const EditCommand* command(std::size_t index) const noexcept { return index < commands_.size() ? commands_[index].get() : nullptr; }
+    bool serialize(ISerializer& archive, std::string_view key = "history") const {
+        archive.write_string(std::string{key} + ".count", std::to_string(commands_.size()));
+        for (std::size_t i = 0; i < commands_.size(); ++i)
+            if (!commands_[i]->serialize(archive, std::string{key} + "." + std::to_string(i))) return false;
+        return true;
+    }
 
 private:
     std::vector<std::unique_ptr<EditCommand>> commands_;
@@ -91,11 +112,47 @@ public:
     void redo() override { room_ = after_; }
     void undo() override { room_ = before_; }
     [[nodiscard]] std::string name() const override { return label_; }
+    bool serialize(ISerializer& archive, std::string_view key) const override {
+        RoomDesign before_design;
+        before_design.rooms.push_back(before_);
+        RoomDesign after_design;
+        after_design.rooms.push_back(after_);
+        MemoryArchive before_archive;
+        MemoryArchive after_archive;
+        room_engine::serialize(before_design, before_archive);
+        room_engine::serialize(after_design, after_archive);
+        archive.write_string(std::string{key} + ".name", label_);
+        archive.write_string(std::string{key} + ".before", before_archive.read_string("room_design"));
+        archive.write_string(std::string{key} + ".after", after_archive.read_string("room_design"));
+        return true;
+    }
 
 private:
     Room& room_;
     Room before_;
     Room after_;
+    std::string label_;
+};
+
+class SetSnapshotCommand final : public EditCommand {
+public:
+    SetSnapshotCommand(std::unordered_set<StableId>& target, std::unordered_set<StableId> before,
+                       std::unordered_set<StableId> after, std::string label)
+        : target_(target), before_(std::move(before)), after_(std::move(after)), label_(std::move(label)) {}
+    void redo() override { target_ = after_; }
+    void undo() override { target_ = before_; }
+    [[nodiscard]] std::string name() const override { return label_; }
+    bool serialize(ISerializer& archive, std::string_view key) const override {
+        std::string payload;
+        for (const auto& value : after_) payload += value + "\n";
+        archive.write_string(std::string{key} + ".name", label_);
+        archive.write_string(std::string{key} + ".values", payload);
+        return true;
+    }
+private:
+    std::unordered_set<StableId>& target_;
+    std::unordered_set<StableId> before_;
+    std::unordered_set<StableId> after_;
     std::string label_;
 };
 
@@ -108,7 +165,26 @@ public:
     [[nodiscard]] const SnapSettings& snapping() const noexcept { return snap_; }
     void set_snapping(SnapSettings settings) noexcept { snap_ = settings; }
     [[nodiscard]] const EditorSelection& selection() const noexcept { return selection_; }
-    void clear_selection() noexcept { selection_ = {}; }
+    [[nodiscard]] const EditorSelectionSet& selections() const noexcept { return selections_; }
+    void clear_selection() noexcept { selection_ = {}; selections_.clear(); }
+    void set_selection(EditorSelectionSet selections) {
+        selections_ = std::move(selections);
+        selection_ = selections_.empty() ? EditorSelection{} : selections_.back();
+    }
+    [[nodiscard]] bool is_locked(const StableId& id) const { return locked_.contains(id); }
+    [[nodiscard]] bool is_visible(const StableId& id) const { return !hidden_.contains(id); }
+    [[nodiscard]] bool dirty() const noexcept { return dirty_; }
+    void mark_saved() noexcept { dirty_ = false; }
+    void set_autosave_path(std::filesystem::path path) { autosave_path_ = std::move(path); }
+    [[nodiscard]] const std::optional<std::filesystem::path>& autosave_path() const noexcept { return autosave_path_; }
+    void set_autosave_interval(std::chrono::milliseconds interval) noexcept { autosave_interval_ = interval; }
+    [[nodiscard]] bool autosave_due(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) const noexcept {
+        return dirty_ && autosave_path_.has_value() && now - last_save_ >= autosave_interval_;
+    }
+    bool tick_autosave(std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) {
+        if (!autosave_due(now)) return false;
+        return save_project(*autosave_path_);
+    }
     [[nodiscard]] CommandHistory& history() noexcept { return history_; }
     [[nodiscard]] const CommandHistory& history() const noexcept { return history_; }
 
@@ -156,15 +232,37 @@ public:
                 return detail::distance(point, a) <= tolerance || detail::distance(point, b) <= tolerance;
             };
             for (const auto& opening : room_.doors) if (opening.wall_id == wall.id && on_wall(opening.offset, opening.width)) {
-                selection_ = {EditorSelectionType::Door, opening.id}; return true;
+                return select_item({EditorSelectionType::Door, opening.id}, false);
             }
             for (const auto& opening : room_.windows) if (opening.wall_id == wall.id && on_wall(opening.offset, opening.width)) {
-                selection_ = {EditorSelectionType::Window, opening.id}; return true;
+                return select_item({EditorSelectionType::Window, opening.id}, false);
             }
         }
-        if (const auto hit = hit_wall(point, tolerance)) { selection_ = {EditorSelectionType::Wall, hit->id}; return true; }
-        selection_ = {};
+        if (const auto hit = hit_wall(point, tolerance)) return select_item({EditorSelectionType::Wall, hit->id}, false);
+        clear_selection();
         return false;
+    }
+
+    bool select(Point2 point, bool additive, float tolerance = 0.25F) {
+        for (const auto& wall : room_.walls) {
+            const float length = detail::distance(wall.start, wall.end);
+            for (const auto& opening : room_.doors) if (opening.wall_id == wall.id && detail::distance(point, detail::lerp(wall.start, wall.end, opening.offset / length)) <= tolerance)
+                return select_item({EditorSelectionType::Door, opening.id}, additive);
+            for (const auto& opening : room_.windows) if (opening.wall_id == wall.id && detail::distance(point, detail::lerp(wall.start, wall.end, opening.offset / length)) <= tolerance)
+                return select_item({EditorSelectionType::Window, opening.id}, additive);
+        }
+        if (const auto hit = hit_wall(point, tolerance)) return select_item({EditorSelectionType::Wall, hit->id}, additive);
+        if (!additive) clear_selection();
+        return false;
+    }
+
+    void select_all() {
+        selections_.clear();
+        for (const auto& wall : room_.walls) if (is_visible(wall.id) && !is_locked(wall.id)) selections_.push_back({EditorSelectionType::Wall, wall.id});
+        for (const auto& door : room_.doors) if (is_visible(door.id) && !is_locked(door.id)) selections_.push_back({EditorSelectionType::Door, door.id});
+        for (const auto& window : room_.windows) if (is_visible(window.id) && !is_locked(window.id)) selections_.push_back({EditorSelectionType::Window, window.id});
+        for (const auto& item : room_.furniture) if (is_visible(item.id) && !is_locked(item.id)) selections_.push_back({EditorSelectionType::Furniture, item.id});
+        selection_ = selections_.empty() ? EditorSelection{} : selections_.back();
     }
 
     bool draw_wall(Point2 start, Point2 end, float thickness = 0.2F, float height = 2.5F) {
@@ -173,40 +271,40 @@ public:
         if (detail::distance(start, end) <= 0.0001F) return false;
         Room after = room_;
         after.walls.push_back({detail::next_id(room_, "wall"), start, end, thickness, height, {}});
-        history_.execute(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), "Draw wall"));
-        selection_ = {EditorSelectionType::Wall, room_.walls.back().id};
+        commit(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), "Draw wall"));
+        set_selection({{EditorSelectionType::Wall, room_.walls.back().id}});
         return true;
     }
 
     bool move_endpoint(const StableId& wall_id, bool start, Point2 point) {
         const auto it = std::find_if(room_.walls.begin(), room_.walls.end(), [&](const auto& wall) { return wall.id == wall_id; });
-        if (it == room_.walls.end()) return false;
+        if (it == room_.walls.end() || is_locked(wall_id)) return false;
         Room after = room_;
         auto& wall = *std::find_if(after.walls.begin(), after.walls.end(), [&](const auto& value) { return value.id == wall_id; });
         Point2 snapped = snap_point(point, wall_id);
         if (start) wall.start = snapped; else wall.end = snapped;
         if (detail::distance(wall.start, wall.end) <= 0.0001F) return false;
-        history_.execute(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), "Move wall endpoint"));
-        selection_ = {EditorSelectionType::Wall, wall_id};
+        commit(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), "Move wall endpoint"));
+        set_selection({{EditorSelectionType::Wall, wall_id}});
         return true;
     }
 
     bool set_wall_length(const StableId& wall_id, float length) {
         const auto it = std::find_if(room_.walls.begin(), room_.walls.end(), [&](const auto& wall) { return wall.id == wall_id; });
-        if (it == room_.walls.end() || !std::isfinite(length) || length <= 0.0F) return false;
+        if (it == room_.walls.end() || is_locked(wall_id) || !std::isfinite(length) || length <= 0.0F) return false;
         const float old_length = detail::distance(it->start, it->end);
         if (old_length <= 0.0001F) return false;
         Room after = room_;
         auto& wall = *std::find_if(after.walls.begin(), after.walls.end(), [&](const auto& value) { return value.id == wall_id; });
         const Point2 direction{(wall.end.x - wall.start.x) / old_length, (wall.end.y - wall.start.y) / old_length};
         wall.end = {wall.start.x + direction.x * length, wall.start.y + direction.y * length};
-        history_.execute(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), "Set wall dimension"));
-        selection_ = {EditorSelectionType::Wall, wall_id};
+        commit(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), "Set wall dimension"));
+        set_selection({{EditorSelectionType::Wall, wall_id}});
         return true;
     }
 
     bool set_opening_width(const StableId& opening_id, float width) {
-        if (!std::isfinite(width) || width <= 0.0F) return false;
+        if (is_locked(opening_id) || !std::isfinite(width) || width <= 0.0F) return false;
         Room after = room_;
         auto door = std::find_if(after.doors.begin(), after.doors.end(), [&](const auto& x) { return x.id == opening_id; });
         if (door != after.doors.end()) {
@@ -221,28 +319,132 @@ public:
             window->width = width;
         }
         const bool is_door = door != after.doors.end();
-        history_.execute(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), "Set opening dimension"));
-        selection_ = {is_door ? EditorSelectionType::Door : EditorSelectionType::Window, opening_id};
+        commit(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), "Set opening dimension"));
+        set_selection({{is_door ? EditorSelectionType::Door : EditorSelectionType::Window, opening_id}});
         return true;
     }
 
     bool delete_selection() {
-        if (selection_.type == EditorSelectionType::None) return false;
+        const auto selected = selections_or_single();
+        if (selected.empty()) return false;
+        for (const auto& item : selected) if (is_locked(item.id)) return false;
         Room after = room_;
-        if (selection_.type == EditorSelectionType::Wall) {
-            after.walls.erase(std::remove_if(after.walls.begin(), after.walls.end(), [&](const auto& x) { return x.id == selection_.id; }), after.walls.end());
-            after.doors.erase(std::remove_if(after.doors.begin(), after.doors.end(), [&](const auto& x) { return x.wall_id == selection_.id; }), after.doors.end());
-            after.windows.erase(std::remove_if(after.windows.begin(), after.windows.end(), [&](const auto& x) { return x.wall_id == selection_.id; }), after.windows.end());
-        } else if (selection_.type == EditorSelectionType::Door) after.doors.erase(std::remove_if(after.doors.begin(), after.doors.end(), [&](const auto& x) { return x.id == selection_.id; }), after.doors.end());
-        else after.windows.erase(std::remove_if(after.windows.begin(), after.windows.end(), [&](const auto& x) { return x.id == selection_.id; }), after.windows.end());
-        if (after.walls.size() == room_.walls.size() && after.doors.size() == room_.doors.size() && after.windows.size() == room_.windows.size()) return false;
-        history_.execute(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), "Delete selection"));
-        selection_ = {};
+        for (const auto& item : selected) {
+            if (item.type == EditorSelectionType::Wall) {
+                after.walls.erase(std::remove_if(after.walls.begin(), after.walls.end(), [&](const auto& x) { return x.id == item.id; }), after.walls.end());
+                after.doors.erase(std::remove_if(after.doors.begin(), after.doors.end(), [&](const auto& x) { return x.wall_id == item.id; }), after.doors.end());
+                after.windows.erase(std::remove_if(after.windows.begin(), after.windows.end(), [&](const auto& x) { return x.wall_id == item.id; }), after.windows.end());
+            } else if (item.type == EditorSelectionType::Door) after.doors.erase(std::remove_if(after.doors.begin(), after.doors.end(), [&](const auto& x) { return x.id == item.id; }), after.doors.end());
+            else if (item.type == EditorSelectionType::Window) after.windows.erase(std::remove_if(after.windows.begin(), after.windows.end(), [&](const auto& x) { return x.id == item.id; }), after.windows.end());
+            else if (item.type == EditorSelectionType::Furniture) after.furniture.erase(std::remove_if(after.furniture.begin(), after.furniture.end(), [&](const auto& x) { return x.id == item.id; }), after.furniture.end());
+        }
+        if (after.walls.size() == room_.walls.size() && after.doors.size() == room_.doors.size() && after.windows.size() == room_.windows.size() && after.furniture.size() == room_.furniture.size()) return false;
+        commit(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), "Delete selection"));
+        clear_selection();
         return true;
     }
 
     bool place_door(const StableId& wall_id, float offset, float width = 0.9F) { return place_opening(wall_id, offset, width, true); }
     bool place_window(const StableId& wall_id, float offset, float width = 1.2F) { return place_opening(wall_id, offset, width, false); }
+
+    bool set_wall_properties(const StableId& id, float thickness, float height) {
+        if (!std::isfinite(thickness) || !std::isfinite(height) || thickness <= 0.0F || height <= 0.0F) return false;
+        Room after = room_;
+        const auto it = std::find_if(after.walls.begin(), after.walls.end(), [&](const auto& x) { return x.id == id; });
+        if (it == after.walls.end() || is_locked(id)) return false;
+        it->thickness = thickness; it->height = height;
+        commit(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), "Edit wall properties"));
+        set_selection({{EditorSelectionType::Wall, id}}); return true;
+    }
+
+    bool set_opening_properties(const StableId& id, float width, float bottom, float height) {
+        if (!std::isfinite(width) || !std::isfinite(bottom) || !std::isfinite(height) || width <= 0.0F || bottom < 0.0F || height <= 0.0F) return false;
+        Room after = room_;
+        auto door = std::find_if(after.doors.begin(), after.doors.end(), [&](const auto& x) { return x.id == id; });
+        auto window = std::find_if(after.windows.begin(), after.windows.end(), [&](const auto& x) { return x.id == id; });
+        const auto wall_id = door != after.doors.end() ? door->wall_id : window != after.windows.end() ? window->wall_id : StableId{};
+        const auto wall = std::find_if(after.walls.begin(), after.walls.end(), [&](const auto& x) { return x.id == wall_id; });
+        if (wall == after.walls.end() || is_locked(id) || is_locked(wall_id)) return false;
+        if (door != after.doors.end()) { if (door->offset + width > detail::distance(wall->start, wall->end) || bottom + height > wall->height) return false; door->width = width; door->bottom = bottom; door->height = height; }
+        else if (window != after.windows.end()) { if (window->offset + width > detail::distance(wall->start, wall->end) || bottom + height > wall->height) return false; window->width = width; window->bottom = bottom; window->height = height; }
+        else return false;
+        const bool is_door = door != after.doors.end();
+        commit(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), "Edit opening properties"));
+        set_selection({{is_door ? EditorSelectionType::Door : EditorSelectionType::Window, id}}); return true;
+    }
+
+    bool set_furniture_properties(const StableId& id, Transform transform, Vec3 dimensions) {
+        if (!std::isfinite(dimensions.x) || !std::isfinite(dimensions.y) || !std::isfinite(dimensions.z) || dimensions.x <= 0.0F || dimensions.y <= 0.0F || dimensions.z <= 0.0F || is_locked(id)) return false;
+        Room after = room_;
+        const auto it = std::find_if(after.furniture.begin(), after.furniture.end(), [&](const auto& x) { return x.id == id; });
+        if (it == after.furniture.end()) return false;
+        it->transform = transform; it->dimensions = dimensions;
+        commit(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), "Edit furniture properties"));
+        set_selection({{EditorSelectionType::Furniture, id}}); return true;
+    }
+
+    bool toggle_lock(const StableId& id) { return toggle_flag(locked_, id, "Toggle lock"); }
+    bool toggle_visibility(const StableId& id) { return toggle_flag(hidden_, id, "Toggle visibility"); }
+    bool lock_selection() { return set_flag_for_selection(locked_, true, "Lock selection"); }
+    bool unlock_selection() { return set_flag_for_selection(locked_, false, "Unlock selection"); }
+    bool hide_selection() { return set_flag_for_selection(hidden_, true, "Hide selection"); }
+    bool show_selection() { return set_flag_for_selection(hidden_, false, "Show selection"); }
+
+    bool copy_selection() {
+        clipboard_ = Room{};
+        for (const auto& selected : selections_or_single()) {
+            if (selected.type == EditorSelectionType::Wall) {
+                auto it = std::find_if(room_.walls.begin(), room_.walls.end(), [&](const auto& x) { return x.id == selected.id; });
+                if (it != room_.walls.end()) clipboard_.walls.push_back(*it);
+            } else if (selected.type == EditorSelectionType::Door) {
+                auto it = std::find_if(room_.doors.begin(), room_.doors.end(), [&](const auto& x) { return x.id == selected.id; });
+                if (it != room_.doors.end()) clipboard_.doors.push_back(*it);
+            } else if (selected.type == EditorSelectionType::Window) {
+                auto it = std::find_if(room_.windows.begin(), room_.windows.end(), [&](const auto& x) { return x.id == selected.id; });
+                if (it != room_.windows.end()) clipboard_.windows.push_back(*it);
+            } else if (selected.type == EditorSelectionType::Furniture) {
+                auto it = std::find_if(room_.furniture.begin(), room_.furniture.end(), [&](const auto& x) { return x.id == selected.id; });
+                if (it != room_.furniture.end()) clipboard_.furniture.push_back(*it);
+            }
+        }
+        return !clipboard_.walls.empty() || !clipboard_.doors.empty() || !clipboard_.windows.empty() || !clipboard_.furniture.empty();
+    }
+
+    bool paste(Point2 offset = {0.25F, 0.25F}) {
+        if (clipboard_.walls.empty() && clipboard_.doors.empty() && clipboard_.windows.empty() && clipboard_.furniture.empty()) return false;
+        Room after = room_; EditorSelectionSet pasted;
+        for (auto wall : clipboard_.walls) { wall.id = detail::next_id(after, "wall"); wall.start.x += offset.x; wall.end.x += offset.x; wall.start.y += offset.y; wall.end.y += offset.y; after.walls.push_back(wall); pasted.push_back({EditorSelectionType::Wall, wall.id}); }
+        for (auto door : clipboard_.doors) { const auto original = door.wall_id; auto source = std::find_if(clipboard_.walls.begin(), clipboard_.walls.end(), [&](const auto& x) { return x.id == original; }); if (source != clipboard_.walls.end()) { const auto pasted_wall = std::find_if(pasted.begin(), pasted.end(), [&](const auto& x) { return x.type == EditorSelectionType::Wall; }); if (pasted_wall != pasted.end()) door.wall_id = pasted_wall->id; } door.id = detail::next_id(after, "door"); after.doors.push_back(door); pasted.push_back({EditorSelectionType::Door, door.id}); }
+        for (auto window : clipboard_.windows) { window.id = detail::next_id(after, "window"); after.windows.push_back(window); pasted.push_back({EditorSelectionType::Window, window.id}); }
+        for (auto item : clipboard_.furniture) { item.id = detail::next_id(after, "furniture"); item.transform.position.x += offset.x; item.transform.position.z += offset.y; after.furniture.push_back(item); pasted.push_back({EditorSelectionType::Furniture, item.id}); }
+        commit(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), "Paste")); set_selection(std::move(pasted)); return true;
+    }
+    bool duplicate_selection() { return copy_selection() && paste(); }
+    bool copy() { return copy_selection(); }
+    bool duplicate() { return duplicate_selection(); }
+    bool undo() { const bool changed = history_.undo(); dirty_ = changed || dirty_; return changed; }
+    bool redo() { const bool changed = history_.redo(); dirty_ = changed || dirty_; return changed; }
+    bool save(const std::filesystem::path& path) { return save_project(path); }
+    bool open(const std::filesystem::path& path) { return open_project(path); }
+
+    bool handle_shortcut(EditorKey key) {
+        switch (key) { case EditorKey::Undo: return undo(); case EditorKey::Redo: return redo(); case EditorKey::Copy: return copy_selection(); case EditorKey::Paste: return paste(); case EditorKey::Duplicate: return duplicate_selection(); case EditorKey::Delete: return delete_selection(); case EditorKey::SelectAll: select_all(); return true; case EditorKey::ToggleLock: return toggle_selection_flag(locked_, "Toggle lock"); case EditorKey::ToggleVisibility: return toggle_selection_flag(hidden_, "Toggle visibility"); case EditorKey::Save: return autosave_path_.has_value() && save_project(*autosave_path_); }
+        return false;
+    }
+
+    bool save_project(const std::filesystem::path& path) {
+        RoomDesign design; design.rooms.push_back(room_); MemoryArchive archive; serialize(design, archive);
+        const auto temporary = path.string() + ".tmp"; std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        if (!out) return false; out << archive.read_string("room_design"); out.close();
+        std::error_code error; std::filesystem::rename(temporary, path, error); if (error) { std::filesystem::remove(temporary); return false; }
+        dirty_ = false; last_save_ = std::chrono::steady_clock::now(); return true;
+    }
+
+    bool open_project(const std::filesystem::path& path) {
+        std::ifstream in(path, std::ios::binary); if (!in) return false; MemoryArchive archive; std::string payload((std::istreambuf_iterator<char>(in)), {}); archive.write_string("room_design", payload);
+        const auto design = deserialize(archive); if (!design || design->rooms.empty() || !design->valid()) return false;
+        room_ = design->rooms.front(); history_.clear(); clear_selection(); locked_.clear(); hidden_.clear(); dirty_ = false; last_save_ = std::chrono::steady_clock::now(); return true;
+    }
 
     [[nodiscard]] std::vector<ValidationIssue> validate() const {
         RoomDesign design;
@@ -256,24 +458,64 @@ public:
     }
 
 private:
+    void commit(std::unique_ptr<EditCommand> command) { history_.execute(std::move(command)); dirty_ = true; }
+
+    bool select_item(EditorSelection item, bool additive) {
+        if (is_locked(item.id) || !is_visible(item.id)) return false;
+        if (!additive) selections_.clear();
+        if (std::find(selections_.begin(), selections_.end(), item) == selections_.end()) selections_.push_back(item);
+        selection_ = item; return true;
+    }
+
+    [[nodiscard]] EditorSelectionSet selections_or_single() const {
+        return selections_.empty() && selection_.type != EditorSelectionType::None ? EditorSelectionSet{selection_} : selections_;
+    }
+
+    bool toggle_flag(std::unordered_set<StableId>& flags, const StableId& id, std::string label) {
+        if (id.empty()) return false;
+        auto before = flags; if (!flags.insert(id).second) flags.erase(id); auto after = flags;
+        flags = before; commit(std::make_unique<SetSnapshotCommand>(flags, std::move(before), std::move(after), std::move(label))); return true;
+    }
+
+    bool set_flag_for_selection(std::unordered_set<StableId>& flags, bool value, std::string label) {
+        const auto selected = selections_or_single(); if (selected.empty()) return false;
+        auto before = flags; for (const auto& item : selected) { if (value) flags.insert(item.id); else flags.erase(item.id); }
+        if (before == flags) return false; auto after = flags; flags = before;
+        commit(std::make_unique<SetSnapshotCommand>(flags, std::move(before), std::move(after), std::move(label))); return true;
+    }
+
+    bool toggle_selection_flag(std::unordered_set<StableId>& flags, std::string label) {
+        const auto selected = selections_or_single(); if (selected.empty()) return false;
+        auto before = flags; for (const auto& item : selected) { if (!flags.insert(item.id).second) flags.erase(item.id); }
+        auto after = flags; flags = before; commit(std::make_unique<SetSnapshotCommand>(flags, std::move(before), std::move(after), std::move(label))); return true;
+    }
+
     bool place_opening(const StableId& wall_id, float offset, float width, bool door) {
         const auto wall = std::find_if(room_.walls.begin(), room_.walls.end(), [&](const auto& x) { return x.id == wall_id; });
-        if (wall == room_.walls.end() || !std::isfinite(offset) || !std::isfinite(width) || width <= 0.0F) return false;
+        if (wall == room_.walls.end() || is_locked(wall_id) || !std::isfinite(offset) || !std::isfinite(width) || width <= 0.0F) return false;
         const float wall_length = detail::distance(wall->start, wall->end);
         offset = std::clamp(offset, 0.0F, wall_length);
         if (offset + width > wall_length + 0.0001F) return false;
         Room after = room_;
         if (door) after.doors.push_back(Door{detail::next_id(room_, "door"), wall_id, offset, width, 0.0F, 2.1F, false, {}});
         else after.windows.push_back(Window{detail::next_id(room_, "window"), wall_id, offset, width, 0.9F, 1.2F, {}});
-        history_.execute(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), door ? "Place door" : "Place window"));
-        selection_ = {door ? EditorSelectionType::Door : EditorSelectionType::Window, door ? room_.doors.back().id : room_.windows.back().id};
+        commit(std::make_unique<RoomSnapshotCommand>(room_, room_, std::move(after), door ? "Place door" : "Place window"));
+        set_selection({{door ? EditorSelectionType::Door : EditorSelectionType::Window, door ? room_.doors.back().id : room_.windows.back().id}});
         return true;
     }
 
     Room& room_;
     SnapSettings snap_{};
     EditorSelection selection_{};
+    EditorSelectionSet selections_;
+    std::unordered_set<StableId> locked_;
+    std::unordered_set<StableId> hidden_;
+    Room clipboard_;
     CommandHistory history_;
+    bool dirty_ = false;
+    std::optional<std::filesystem::path> autosave_path_;
+    std::chrono::milliseconds autosave_interval_{1000};
+    std::chrono::steady_clock::time_point last_save_ = std::chrono::steady_clock::now();
 };
 
 }  // namespace room_engine

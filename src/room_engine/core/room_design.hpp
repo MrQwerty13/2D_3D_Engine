@@ -269,19 +269,23 @@ inline void serialize(const RoomDesign& design, ISerializer& archive) {
     RoomDesign design;
     std::size_t count = 0;
     if (!(in >> design.version >> count)) return std::nullopt;
+    constexpr std::size_t max_records = 1'000'000;
+    if (count > max_records) return std::nullopt;
     for (std::size_t i = 0; i < count; ++i) { Material m; if (!detail::read_string(in, m.id) || !detail::read_string(in, m.name)) return std::nullopt; m.albedo = detail::read_vec3(in); in >> m.roughness; design.materials.push_back(std::move(m)); }
-    if (!(in >> count)) return std::nullopt;
+    if (!(in >> count) || count > max_records) return std::nullopt;
     for (std::size_t i = 0; i < count; ++i) {
         Room room; if (!detail::read_string(in, room.id) || !detail::read_string(in, room.name) || !(in >> count)) return std::nullopt;
+        if (count > max_records) return std::nullopt;
         for (std::size_t j = 0; j < count; ++j) { WallSegment w; if (!detail::read_string(in, w.id)) return std::nullopt; w.start = detail::read_point(in); w.end = detail::read_point(in); in >> w.thickness >> w.height; if (!detail::read_string(in, w.material_id)) return std::nullopt; room.walls.push_back(std::move(w)); }
         bool present = false; in >> present; if (present) { Floor f; std::size_t points; detail::read_string(in, f.id); in >> points; f.boundary.reserve(points); for (std::size_t j = 0; j < points; ++j) f.boundary.push_back(detail::read_point(in)); in >> f.elevation; detail::read_string(in, f.material_id); room.floor = std::move(f); }
         in >> present; if (present) { Ceiling c; std::size_t points; detail::read_string(in, c.id); in >> points; c.boundary.reserve(points); for (std::size_t j = 0; j < points; ++j) c.boundary.push_back(detail::read_point(in)); in >> c.elevation; detail::read_string(in, c.material_id); room.ceiling = std::move(c); }
-        in >> count; for (std::size_t j = 0; j < count; ++j) { Door d; detail::read_string(in, d.id); detail::read_string(in, d.wall_id); in >> d.offset >> d.width >> d.bottom >> d.height >> d.open; detail::read_string(in, d.material_id); room.doors.push_back(std::move(d)); }
-        in >> count; for (std::size_t j = 0; j < count; ++j) { Window w; detail::read_string(in, w.id); detail::read_string(in, w.wall_id); in >> w.offset >> w.width >> w.bottom >> w.height; detail::read_string(in, w.material_id); room.windows.push_back(std::move(w)); }
-        in >> count; for (std::size_t j = 0; j < count; ++j) { Furniture f; detail::read_string(in, f.id); detail::read_string(in, f.name); f.transform = detail::read_transform(in); f.dimensions = detail::read_vec3(in); detail::read_string(in, f.material_id); room.furniture.push_back(std::move(f)); }
+        if (!(in >> count) || count > max_records) return std::nullopt; for (std::size_t j = 0; j < count; ++j) { Door d; if (!detail::read_string(in, d.id) || !detail::read_string(in, d.wall_id)) return std::nullopt; in >> d.offset >> d.width >> d.bottom >> d.height >> d.open; if (!detail::read_string(in, d.material_id)) return std::nullopt; room.doors.push_back(std::move(d)); }
+        if (!(in >> count) || count > max_records) return std::nullopt; for (std::size_t j = 0; j < count; ++j) { Window w; if (!detail::read_string(in, w.id) || !detail::read_string(in, w.wall_id)) return std::nullopt; in >> w.offset >> w.width >> w.bottom >> w.height; if (!detail::read_string(in, w.material_id)) return std::nullopt; room.windows.push_back(std::move(w)); }
+        if (!(in >> count) || count > max_records) return std::nullopt; for (std::size_t j = 0; j < count; ++j) { Furniture f; if (!detail::read_string(in, f.id) || !detail::read_string(in, f.name)) return std::nullopt; f.transform = detail::read_transform(in); f.dimensions = detail::read_vec3(in); if (!detail::read_string(in, f.material_id)) return std::nullopt; room.furniture.push_back(std::move(f)); }
         design.rooms.push_back(std::move(room));
     }
-    return in.good() || in.eof() ? std::optional<RoomDesign>{std::move(design)} : std::nullopt;
+    if (in.fail()) return std::nullopt;
+    return std::optional<RoomDesign>{std::move(design)};
 }
 
 }  // namespace room_engine
