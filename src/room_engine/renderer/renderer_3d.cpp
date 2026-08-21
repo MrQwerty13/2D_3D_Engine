@@ -59,6 +59,12 @@ std::string read_file(const std::filesystem::path& path, std::string& error) {
     return contents.str();
 }
 
+std::string cache_key(const std::filesystem::path& path) {
+    std::error_code error;
+    const auto absolute = std::filesystem::absolute(path, error);
+    return (error ? path : absolute).lexically_normal().string();
+}
+
 std::string_view array_text(std::string_view json, std::string_view key) {
     const std::size_t key_pos = json.find('"' + std::string(key) + '"');
     if (key_pos == std::string_view::npos) return {};
@@ -218,6 +224,7 @@ AssetLoadResult load_gltf(const std::filesystem::path& path) {
         for (std::size_t i = 0; i < positions.count; ++i) {
             std::array<float, 3> value{};
             if (!read_value(binary, position_offset + i * stride, value[0]) || !read_value(binary, position_offset + i * stride + sizeof(float), value[1]) || !read_value(binary, position_offset + i * stride + sizeof(float) * 2U, value[2])) break;
+            if (!std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2])) return AssetLoadResult::failure("glTF contains a non-finite vertex: " + path.string());
             mesh.vertices.push_back({{value[0], value[1], value[2]}, {}, {}, {0.0F, 1.0F, 0.0F}});
         }
         const std::size_t index_offset = view_offset(index_accessor) + index_accessor.offset;
@@ -227,10 +234,31 @@ AssetLoadResult load_gltf(const std::filesystem::path& path) {
             if (!value) break;
             mesh.indices.push_back(*value);
         }
-        if (mesh.valid()) result.meshes.push_back(std::move(mesh));
+        if (mesh.valid()) {
+            for (const auto index : mesh.indices) if (index >= mesh.vertices.size()) return AssetLoadResult::failure("glTF index is outside its vertex buffer: " + path.string());
+            result.meshes.push_back(std::move(mesh));
+        }
     }
     if (!result.valid()) return AssetLoadResult::failure("no supported triangle meshes found: " + path.string());
+    result.bounds.minimum = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
+    result.bounds.maximum = {std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest()};
+    for (const auto& mesh : result.meshes) for (const auto& vertex : mesh.vertices) {
+        result.bounds.minimum.x = std::min(result.bounds.minimum.x, vertex.position.x);
+        result.bounds.minimum.y = std::min(result.bounds.minimum.y, vertex.position.y);
+        result.bounds.minimum.z = std::min(result.bounds.minimum.z, vertex.position.z);
+        result.bounds.maximum.x = std::max(result.bounds.maximum.x, vertex.position.x);
+        result.bounds.maximum.y = std::max(result.bounds.maximum.y, vertex.position.y);
+        result.bounds.maximum.z = std::max(result.bounds.maximum.z, vertex.position.z);
+    }
     return {std::move(result), {}};
+}
+
+const AssetLoadResult& GltfAssetCache::load(const std::filesystem::path& path) {
+    const std::string key = cache_key(path);
+    if (const auto it = entries_.find(key); it != entries_.end()) return it->second;
+    const auto [it, inserted] = entries_.emplace(key, load_gltf(path));
+    static_cast<void>(inserted);
+    return it->second;
 }
 
 void Renderer3D::add_mesh(Mesh mesh, Transform transform, RenderMaterial material, std::uint64_t id) {

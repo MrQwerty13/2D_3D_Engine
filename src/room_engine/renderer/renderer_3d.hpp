@@ -6,6 +6,8 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <cstddef>
+#include <unordered_map>
 #include <optional>
 #include <string>
 #include <utility>
@@ -24,6 +26,12 @@ struct Mesh {
 struct MeshAsset {
     std::vector<Mesh> meshes;
     std::vector<RenderMaterial> materials;
+    struct Bounds {
+        Vec3 minimum{};
+        Vec3 maximum{};
+        [[nodiscard]] bool valid() const noexcept { return minimum.x <= maximum.x && minimum.y <= maximum.y && minimum.z <= maximum.z; }
+        [[nodiscard]] Vec3 dimensions() const noexcept { return maximum - minimum; }
+    } bounds{};
     [[nodiscard]] bool valid() const noexcept { return !meshes.empty(); }
 };
 
@@ -35,6 +43,18 @@ struct AssetLoadResult {
 };
 
 [[nodiscard]] AssetLoadResult load_gltf(const std::filesystem::path& path);
+
+// Caches both successful loads and failures. Keeping failures cached avoids repeatedly
+// parsing a broken file while an editor panel is refreshing its catalog.
+class GltfAssetCache {
+public:
+    [[nodiscard]] const AssetLoadResult& load(const std::filesystem::path& path);
+    void clear() noexcept { entries_.clear(); }
+    [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
+
+private:
+    std::unordered_map<std::string, AssetLoadResult> entries_;
+};
 
 struct DirectionalLight {
     Vec3 direction{-0.4F, -1.0F, -0.3F};
