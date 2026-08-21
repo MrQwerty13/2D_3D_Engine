@@ -80,7 +80,7 @@ inline bool overlap(const Furniture& a, Vec3 a_size, const Furniture& b, Vec3 b_
     return std::fabs(a.transform.position.x - b.transform.position.x) < (a_size.x + b_size.x) * 0.5F &&
            std::fabs(a.transform.position.z - b.transform.position.z) < (a_size.z + b_size.z) * 0.5F;
 }
-inline StableId next_id(const Room& room, const StableId& base) {
+inline StableId catalog_next_id(const Room& room, const StableId& base) {
     StableId id = base;
     std::size_t suffix = 1;
     while (std::any_of(room.furniture.begin(), room.furniture.end(), [&](const Furniture& item) { return item.id == id; })) id = base + "-" + std::to_string(suffix++);
@@ -143,7 +143,7 @@ inline FurniturePlacementResult FurnitureCatalog::place(Room& room, const Stable
         placement.position = {wall->start.x + std::cos(angle) * center + std::sin(angle) * offset, placement.position.y,
                               wall->start.y - std::sin(angle) * center + std::cos(angle) * offset};
     }
-    Furniture item{furniture_id.empty() ? detail::next_id(room, asset_id) : std::move(furniture_id), metadata->name,
+    Furniture item{furniture_id.empty() ? detail::catalog_next_id(room, asset_id) : std::move(furniture_id), metadata->name,
                     {placement.position, placement.rotation, placement.scale}, {dimensions.x * placement.scale.x, dimensions.y * placement.scale.y, dimensions.z * placement.scale.z}, {}};
     const Vec3 item_footprint = detail::footprint(item.dimensions, detail::yaw(item.transform.rotation));
     for (const auto& other : room.furniture) {

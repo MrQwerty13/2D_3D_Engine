@@ -38,17 +38,25 @@ CPPFLAGS += -DROOM_ENGINE_USE_BGFX $(BGFX_CFLAGS)
 endif
 BUILD_DIR := out/$(shell printf '%s' $(CONFIG) | tr '[:upper:]' '[:lower:]')
 
-CORE_SOURCES := src/room_engine/application.cpp src/room_engine/core/presentation.cpp src/room_engine/renderer/renderer.cpp src/room_engine/renderer/debug_draw.cpp src/room_engine/renderer/renderer_2d.cpp src/room_engine/renderer/renderer_3d.cpp
-APP_SOURCES := $(CORE_SOURCES) src/main.cpp
-TEST_SOURCES := src/room_engine/core/presentation.cpp src/room_engine/renderer/renderer.cpp src/room_engine/renderer/debug_draw.cpp src/room_engine/renderer/renderer_2d.cpp src/room_engine/renderer/renderer_3d.cpp tests/smoke_test.cpp tests/room_design_test.cpp
-FORMAT_SOURCES := $(APP_SOURCES) src/room_engine/application.hpp src/room_engine/core/room_design.hpp src/room_engine/core/presentation.hpp src/room_engine/core/presentation.cpp src/room_engine/core/floor_plan_editor.hpp src/room_engine/core/furniture_catalog.hpp src/room_engine/renderer/renderer.hpp src/room_engine/renderer/camera.hpp src/room_engine/renderer/math.hpp src/room_engine/renderer/debug_draw.hpp src/room_engine/renderer/viewport.hpp src/room_engine/renderer/renderer_2d.hpp src/room_engine/renderer/renderer_2d.cpp src/room_engine/renderer/renderer_3d.hpp src/room_engine/renderer/renderer_3d.cpp tests/smoke_test.cpp tests/room_design_test.cpp
+RENDER_SOURCES := src/room_engine/adapters/furniture_editor.cpp src/room_engine/core/presentation.cpp src/room_engine/renderer/renderer.cpp src/room_engine/renderer/debug_draw.cpp src/room_engine/renderer/renderer_2d.cpp src/room_engine/renderer/renderer_3d.cpp
+PLATFORM_SOURCES := src/room_engine/application.cpp
+APP_SOURCES := src/main.cpp
+TEST_SOURCES := tests/smoke_test.cpp tests/room_design_test.cpp
+EXAMPLE_SOURCES := examples/furniture_editor_integration.cpp
+FORMAT_SOURCES := $(RENDER_SOURCES) $(PLATFORM_SOURCES) $(APP_SOURCES) $(TEST_SOURCES) $(EXAMPLE_SOURCES) src/room_engine/application.hpp src/room_engine/core.hpp src/room_engine/rendering.hpp src/room_engine/furniture_editor.hpp src/room_engine/adapters/furniture_editor.hpp src/room_engine/core/room_design.hpp src/room_engine/core/presentation.hpp src/room_engine/core/floor_plan_editor.hpp src/room_engine/core/furniture_catalog.hpp src/room_engine/renderer/renderer.hpp src/room_engine/renderer/camera.hpp src/room_engine/renderer/math.hpp src/room_engine/renderer/debug_draw.hpp src/room_engine/renderer/viewport.hpp src/room_engine/renderer/renderer_2d.hpp src/room_engine/renderer/renderer_3d.hpp
+RENDER_OBJECTS := $(RENDER_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
+PLATFORM_OBJECTS := $(PLATFORM_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
 APP_OBJECTS := $(APP_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
 TEST_OBJECTS := $(TEST_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
+EXAMPLE_OBJECTS := $(EXAMPLE_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
+LIB_RENDER := $(BUILD_DIR)/lib/libroom_engine_renderer.a
+LIB_PLATFORM := $(BUILD_DIR)/lib/libroom_engine_platform.a
 APP := $(BUILD_DIR)/room_engine_app
 TEST := $(BUILD_DIR)/room_engine_smoke_tests
 PROFILE := $(BUILD_DIR)/room_engine_profile
+EXAMPLE := $(BUILD_DIR)/furniture_editor_integration
 
-.PHONY: all debug release build test profile check format format-check clean help verify-tools verify-sdl
+.PHONY: all debug release build libraries example test profile check format format-check clean help verify-tools verify-sdl
 
 all: debug
 
@@ -58,13 +66,30 @@ debug:
 release:
 	$(MAKE) CONFIG=Release build
 
-build: verify-tools verify-sdl $(APP)
+build: verify-tools verify-sdl libraries $(APP)
 
-$(APP): $(APP_OBJECTS)
+libraries: $(LIB_RENDER) $(LIB_PLATFORM)
+
+$(LIB_RENDER): $(RENDER_OBJECTS)
+	@mkdir -p $(@D)
+	ar rcs $@ $^
+
+$(LIB_PLATFORM): $(PLATFORM_OBJECTS)
+	@mkdir -p $(@D)
+	ar rcs $@ $^
+
+$(APP): $(APP_OBJECTS) $(LIB_PLATFORM) $(LIB_RENDER)
 	@mkdir -p $(@D)
 	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
 
-$(TEST): $(TEST_OBJECTS)
+$(TEST): $(TEST_OBJECTS) $(LIB_RENDER)
+	@mkdir -p $(@D)
+	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
+
+example: $(EXAMPLE)
+	$(EXAMPLE)
+
+$(EXAMPLE): $(EXAMPLE_OBJECTS) $(LIB_RENDER)
 	@mkdir -p $(@D)
 	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
 
@@ -79,7 +104,7 @@ test: $(TEST)
 profile: $(PROFILE)
 	$(PROFILE)
 
-$(PROFILE): $(BUILD_DIR)/tools/profile_engine.o $(BUILD_DIR)/src/room_engine/renderer/renderer_3d.o
+$(PROFILE): $(BUILD_DIR)/tools/profile_engine.o $(LIB_RENDER)
 	@mkdir -p $(@D)
 	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
 
@@ -106,7 +131,8 @@ clean:
 	rm -rf out
 
 help:
-	@echo "make [debug|release|test|profile|check|format|clean]"
+	@echo "make [debug|release|libraries|example|test|profile|check|format|clean]"
 	@echo "  CONFIG=Debug|Release selects out/debug or out/release"
+	@echo "  libraries builds reusable static libraries under out/<config>/lib"
 
--include $(APP_OBJECTS:.o=.d) $(TEST_OBJECTS:.o=.d)
+-include $(RENDER_OBJECTS:.o=.d) $(PLATFORM_OBJECTS:.o=.d) $(APP_OBJECTS:.o=.d) $(TEST_OBJECTS:.o=.d) $(EXAMPLE_OBJECTS:.o=.d)

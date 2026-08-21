@@ -145,6 +145,15 @@ Presentation and release notes are in [docs/GLB_LIMITATIONS.md](docs/GLB_LIMITAT
 [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). Use `make CONFIG=Release profile`
 to measure procedural build time and project size for 100–300 furniture objects.
 
+## Reusing the engine
+
+Build reusable component libraries with `make CONFIG=Debug libraries` or
+`make CONFIG=Release libraries`. Separate furniture-editor applications can
+include `room_engine/furniture_editor.hpp` and link the renderer library; the
+optional platform library owns SDL window/application setup. See
+[docs/INTEGRATION.md](docs/INTEGRATION.md) and run `make example` for a complete
+consumer that creates matching 2D and 3D furniture scenes.
+
 ## Initial development requirements
 
 The project will target:
