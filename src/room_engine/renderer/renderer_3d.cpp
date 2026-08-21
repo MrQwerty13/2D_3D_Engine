@@ -1,5 +1,8 @@
 #include "room_engine/renderer/renderer_3d.hpp"
 
+#include "room_engine/core/stable_id.hpp"
+#include "room_engine/renderer/triangulation.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -35,9 +38,13 @@ void append_polygon(Mesh& mesh, const std::vector<Point2>& boundary, float y, bo
     const auto base = static_cast<std::uint32_t>(mesh.vertices.size());
     const Vec3 normal = upward ? Vec3{0, 1, 0} : Vec3{0, -1, 0};
     for (const auto point : boundary) mesh.vertices.push_back({{point.x, y, point.y}, {}, {point.x, point.y}, normal});
-    for (std::size_t i = 1; i + 1 < boundary.size(); ++i) {
-        if (upward) mesh.indices.insert(mesh.indices.end(), {base, base + static_cast<std::uint32_t>(i + 1), base + static_cast<std::uint32_t>(i)});
-        else mesh.indices.insert(mesh.indices.end(), {base, base + static_cast<std::uint32_t>(i), base + static_cast<std::uint32_t>(i + 1)});
+    const auto triangles = triangulate_simple_polygon<Point2>(boundary);
+    for (std::size_t i = 0; i + 2 < triangles.size(); i += 3) {
+        const std::uint32_t a = base + triangles[i];
+        const std::uint32_t b = base + triangles[i + 1];
+        const std::uint32_t c = base + triangles[i + 2];
+        if (upward) mesh.indices.insert(mesh.indices.end(), {a, c, b});
+        else mesh.indices.insert(mesh.indices.end(), {a, b, c});
     }
 }
 
@@ -46,8 +53,6 @@ RenderMaterial render_material(const Material* material) {
     const auto channel = [](float value) { return static_cast<std::uint8_t>(std::clamp(value * 255.0F, 0.0F, 255.0F)); };
     return {{channel(material->albedo.x), channel(material->albedo.y), channel(material->albedo.z), 255}, 0.0F, material->roughness};
 }
-
-std::uint64_t scene_id(std::string_view id) { return static_cast<std::uint64_t>(std::hash<std::string_view>{}(id)); }
 
 struct JsonObject { std::string_view text; };
 
@@ -121,16 +126,20 @@ std::string string_value(std::string_view object, std::string_view key) {
 std::vector<std::byte> base64(std::string_view text) {
     static constexpr std::string_view chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::vector<std::byte> result;
-    int accumulator = 0;
+    std::uint32_t accumulator = 0;
     int bits = 0;
     for (const char c : text) {
+        if (c == '=') break;
         const std::size_t value = chars.find(c);
         if (value == std::string_view::npos) continue;
-        accumulator = (accumulator << 6) | static_cast<int>(value);
+        accumulator = (accumulator << 6U) | static_cast<std::uint32_t>(value);
         bits += 6;
         if (bits >= 8) {
             bits -= 8;
-            result.push_back(static_cast<std::byte>((accumulator >> bits) & 0xff));
+            result.push_back(
+                static_cast<std::byte>((accumulator >> static_cast<unsigned int>(bits)) &
+                                       0xffU));
+            accumulator &= bits == 0 ? 0U : (1U << static_cast<unsigned int>(bits)) - 1U;
         }
     }
     return result;
@@ -215,6 +224,11 @@ AssetLoadResult load_gltf(const std::filesystem::path& path) {
         if (!position || !indices || *position < 0 || *indices < 0 || static_cast<std::size_t>(*position) >= accessors.size() || static_cast<std::size_t>(*indices) >= accessors.size()) continue;
         const Accessor& positions = accessors[static_cast<std::size_t>(*position)];
         const Accessor& index_accessor = accessors[static_cast<std::size_t>(*indices)];
+        if (positions.component != 5126 || positions.components < 3 ||
+            (index_accessor.component != 5121 && index_accessor.component != 5123 &&
+             index_accessor.component != 5125))
+            return AssetLoadResult::failure("unsupported glTF accessor format: " +
+                                            path.string());
         if (positions.view < 0 || index_accessor.view < 0 || static_cast<std::size_t>(positions.view) >= view_objects.size() || static_cast<std::size_t>(index_accessor.view) >= view_objects.size()) continue;
         const auto view_offset = [&](const Accessor& accessor) { return static_cast<std::size_t>(number(view_objects[static_cast<std::size_t>(accessor.view)].text, "byteOffset").value_or(0)); };
         const auto view_stride = [&](const Accessor& accessor, std::size_t element_size) { return static_cast<std::size_t>(number(view_objects[static_cast<std::size_t>(accessor.view)].text, "byteStride").value_or(static_cast<double>(element_size))); };
@@ -223,7 +237,12 @@ AssetLoadResult load_gltf(const std::filesystem::path& path) {
         const std::size_t stride = view_stride(positions, sizeof(float) * 3U);
         for (std::size_t i = 0; i < positions.count; ++i) {
             std::array<float, 3> value{};
-            if (!read_value(binary, position_offset + i * stride, value[0]) || !read_value(binary, position_offset + i * stride + sizeof(float), value[1]) || !read_value(binary, position_offset + i * stride + sizeof(float) * 2U, value[2])) break;
+            if (!read_value(binary, position_offset + i * stride, value[0]) ||
+                !read_value(binary, position_offset + i * stride + sizeof(float), value[1]) ||
+                !read_value(binary, position_offset + i * stride + sizeof(float) * 2U,
+                            value[2]))
+                return AssetLoadResult::failure("truncated glTF position accessor: " +
+                                                path.string());
             if (!std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2])) return AssetLoadResult::failure("glTF contains a non-finite vertex: " + path.string());
             mesh.vertices.push_back({{value[0], value[1], value[2]}, {}, {}, {0.0F, 1.0F, 0.0F}});
         }
@@ -231,7 +250,9 @@ AssetLoadResult load_gltf(const std::filesystem::path& path) {
         const std::size_t index_size = index_accessor.component == 5121 ? 1U : index_accessor.component == 5123 ? 2U : 4U;
         for (std::size_t i = 0; i < index_accessor.count; ++i) {
             const auto value = index_value(binary, index_offset + i * index_size, index_accessor.component);
-            if (!value) break;
+            if (!value)
+                return AssetLoadResult::failure("truncated glTF index accessor: " +
+                                                path.string());
             mesh.indices.push_back(*value);
         }
         if (mesh.valid()) {
@@ -279,7 +300,17 @@ void Renderer3D::flush(Renderer& renderer, const Camera& camera) {
             if (index >= instance.mesh.vertices.size()) continue;
             Vertex vertex = instance.mesh.vertices[index];
             vertex.position = transform_point(matrix, vertex.position);
-            vertex.normal = normalize(transform_point(matrix, vertex.normal) - transform_point(matrix, {}));
+            const Vec3 inverse_scaled_normal{
+                instance.transform.scale.x != 0.0F
+                    ? vertex.normal.x / instance.transform.scale.x
+                    : 0.0F,
+                instance.transform.scale.y != 0.0F
+                    ? vertex.normal.y / instance.transform.scale.y
+                    : 0.0F,
+                instance.transform.scale.z != 0.0F
+                    ? vertex.normal.z / instance.transform.scale.z
+                    : 0.0F};
+            vertex.normal = normalize(instance.transform.rotation.rotate(inverse_scaled_normal));
             float illumination = ambient_.intensity;
             const Vec3 light_direction = normalize(directional_.direction * -1.0F);
             illumination += std::max(0.0F, dot(vertex.normal, light_direction)) * directional_.intensity;
@@ -298,7 +329,11 @@ void Renderer3D::flush(Renderer& renderer, const Camera& camera) {
                             shade(instance.material.base_color.b), instance.material.base_color.a};
             vertices.push_back(vertex);
         }
-        if (!vertices.empty()) renderer.draw(renderer.create_vertex_buffer(vertices), vertices.size(), instance.material);
+        if (!vertices.empty()) {
+            RenderMaterial material = instance.material;
+            if (!material.shader.valid()) material.shader = default_shader_;
+            renderer.draw(renderer.create_vertex_buffer(vertices), vertices.size(), material);
+        }
     }
 }
 
@@ -400,7 +435,8 @@ Mesh make_room_opening(float width, float height, float thickness) {
     return mesh;
 }
 
-bool populate_room(Renderer3D& renderer, const RoomDesign& design, const StableId& room_id) {
+bool populate_room(Renderer3D& renderer, const RoomDesign& design, const StableId& room_id,
+                   const FurnitureAssetResolver& furniture_assets) {
     if (!design.valid()) return false;
     const auto room_it = std::find_if(design.rooms.begin(), design.rooms.end(), [&](const Room& room) { return room_id.empty() || room.id == room_id; });
     if (room_it == design.rooms.end()) return false;
@@ -416,32 +452,53 @@ bool populate_room(Renderer3D& renderer, const RoomDesign& design, const StableI
         for (const auto& door : room.doors) if (door.wall_id == wall.id) doors.push_back(&door);
         for (const auto& window : room.windows) if (window.wall_id == wall.id) windows.push_back(&window);
         const float angle = std::atan2(-(wall.end.y - wall.start.y), wall.end.x - wall.start.x);
-        renderer.add_mesh(make_room_wall(wall, doors, windows), {{wall.start.x, 0.0F, wall.start.y}, Quaternion::from_axis_angle({0, 1, 0}, angle)}, render_material(material_for(wall.material_id)), scene_id(wall.id));
+        renderer.add_mesh(make_room_wall(wall, doors, windows), {{wall.start.x, 0.0F, wall.start.y}, Quaternion::from_axis_angle({0, 1, 0}, angle)}, render_material(material_for(wall.material_id)), stable_scene_id(wall.id));
         for (const auto* door : doors) {
             const float center = door->offset + door->width * 0.5F;
             const float dx = (wall.end.x - wall.start.x) / std::hypot(wall.end.x - wall.start.x, wall.end.y - wall.start.y);
             const float dz = (wall.end.y - wall.start.y) / std::hypot(wall.end.x - wall.start.x, wall.end.y - wall.start.y);
-            renderer.add_mesh(make_room_opening(door->width, door->height, std::max(wall.thickness * 0.15F, 0.01F)), {{wall.start.x + dx * center, door->bottom, wall.start.y + dz * center}, Quaternion::from_axis_angle({0, 1, 0}, angle)}, render_material(material_for(door->material_id)), scene_id(door->id));
+            renderer.add_mesh(make_room_opening(door->width, door->height, std::max(wall.thickness * 0.15F, 0.01F)), {{wall.start.x + dx * center, door->bottom, wall.start.y + dz * center}, Quaternion::from_axis_angle({0, 1, 0}, angle)}, render_material(material_for(door->material_id)), stable_scene_id(door->id));
         }
         for (const auto* window : windows) {
             const float center = window->offset + window->width * 0.5F;
             const float dx = (wall.end.x - wall.start.x) / std::hypot(wall.end.x - wall.start.x, wall.end.y - wall.start.y);
             const float dz = (wall.end.y - wall.start.y) / std::hypot(wall.end.x - wall.start.x, wall.end.y - wall.start.y);
-            renderer.add_mesh(make_room_opening(window->width, window->height, std::max(wall.thickness * 0.15F, 0.01F)), {{wall.start.x + dx * center, window->bottom, wall.start.y + dz * center}, Quaternion::from_axis_angle({0, 1, 0}, angle)}, render_material(material_for(window->material_id)), scene_id(window->id));
+            renderer.add_mesh(make_room_opening(window->width, window->height, std::max(wall.thickness * 0.15F, 0.01F)), {{wall.start.x + dx * center, window->bottom, wall.start.y + dz * center}, Quaternion::from_axis_angle({0, 1, 0}, angle)}, render_material(material_for(window->material_id)), stable_scene_id(window->id));
         }
     }
-    if (room.floor) renderer.add_mesh(make_room_floor(*room.floor), {}, render_material(material_for(room.floor->material_id)), scene_id(room.floor->id));
-    if (room.ceiling) renderer.add_mesh(make_room_ceiling(*room.ceiling), {}, render_material(material_for(room.ceiling->material_id)), scene_id(room.ceiling->id));
+    if (room.floor) renderer.add_mesh(make_room_floor(*room.floor), {}, render_material(material_for(room.floor->material_id)), stable_scene_id(room.floor->id));
+    if (room.ceiling) renderer.add_mesh(make_room_ceiling(*room.ceiling), {}, render_material(material_for(room.ceiling->material_id)), stable_scene_id(room.ceiling->id));
     for (const auto& item : room.furniture) {
+        if (furniture_assets) {
+            if (const MeshAsset* asset = furniture_assets(item); asset != nullptr &&
+                                                            asset->valid() &&
+                                                            asset->bounds.valid()) {
+                const Vec3 center{
+                    (asset->bounds.minimum.x + asset->bounds.maximum.x) * 0.5F,
+                    (asset->bounds.minimum.y + asset->bounds.maximum.y) * 0.5F,
+                    (asset->bounds.minimum.z + asset->bounds.maximum.z) * 0.5F};
+                const Vec3 scaled_center{center.x * item.transform.scale.x,
+                                         center.y * item.transform.scale.y,
+                                         center.z * item.transform.scale.z};
+                Transform transform = item.transform;
+                transform.position = item.transform.position -
+                                     item.transform.rotation.rotate(scaled_center);
+                renderer.add_asset(*asset, transform, stable_scene_id(item.id));
+                continue;
+            }
+        }
         Transform transform = item.transform;
-        transform.position.y -= item.dimensions.y * 0.5F;
+        transform.position.y -= item.dimensions.y * transform.scale.y * 0.5F;
         renderer.add_mesh(make_room_opening(item.dimensions.x, item.dimensions.y, item.dimensions.z), transform,
-                          render_material(material_for(item.material_id)), scene_id(item.id));
+                          render_material(material_for(item.material_id)), stable_scene_id(item.id));
     }
     return true;
 }
 
-bool Renderer3D::update_from_room(const RoomDesign& design, const StableId& room_id) { return populate_room(*this, design, room_id); }
+bool Renderer3D::update_from_room(const RoomDesign& design, const StableId& room_id,
+                                  const FurnitureAssetResolver& furniture_assets) {
+    return populate_room(*this, design, room_id, furniture_assets);
+}
 
 void populate_sample_room(Renderer3D& renderer) {
     renderer.begin();

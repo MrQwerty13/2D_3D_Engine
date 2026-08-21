@@ -1,21 +1,14 @@
 #include "room_engine/adapters/furniture_editor.hpp"
 
+#include "room_engine/core/placement.hpp"
+#include "room_engine/core/furniture_catalog.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <vector>
 
 namespace room_engine {
-
-std::uint64_t stable_scene_id(std::string_view id) noexcept {
-    std::uint64_t value = 14695981039346656037ULL;
-    for (const char character : id) {
-        const auto byte = static_cast<unsigned char>(character);
-        value ^= byte;
-        value *= 1099511628211ULL;
-    }
-    return value == 0 ? 1 : value;
-}
 
 void populate_furniture_floor_plan(Renderer2D& renderer, const Room& room,
                                    const FurnitureFloorPlanStyle& style) {
@@ -50,21 +43,10 @@ void populate_furniture_floor_plan(Renderer2D& renderer, const Room& room,
                            style.wall_layer + 1, stable_scene_id(door.id));
     }
     for (const Furniture& item : room.furniture) {
-        const float yaw = std::atan2(2.0F * (item.transform.rotation.w * item.transform.rotation.y +
-                                            item.transform.rotation.x * item.transform.rotation.z),
-                                     1.0F - 2.0F * (item.transform.rotation.y * item.transform.rotation.y +
-                                                    item.transform.rotation.z * item.transform.rotation.z));
-        const float cosine = std::cos(yaw);
-        const float sine = std::sin(yaw);
-        const float half_x = item.dimensions.x * item.transform.scale.x * 0.5F;
-        const float half_z = item.dimensions.z * item.transform.scale.z * 0.5F;
-        const std::array<Vec2, 4> local{{{-half_x, -half_z}, {half_x, -half_z},
-                                         {half_x, half_z}, {-half_x, half_z}}};
+        const FurnitureFootprint footprint = furniture_footprint_corners(item);
         std::array<Vec2, 4> world{};
-        for (std::size_t i = 0; i < local.size(); ++i) {
-            world[i] = {item.transform.position.x + local[i].x * cosine - local[i].y * sine,
-                        item.transform.position.z + local[i].x * sine + local[i].y * cosine};
-        }
+        for (std::size_t i = 0; i < footprint.size(); ++i)
+            world[i] = {footprint[i].x, footprint[i].y};
         renderer.draw_polygon(world, style.furniture, style.furniture_layer,
                               stable_scene_id(item.id));
     }
@@ -73,6 +55,16 @@ void populate_furniture_floor_plan(Renderer2D& renderer, const Room& room,
 bool populate_furniture_scene(Renderer3D& renderer, const RoomDesign& design,
                               const StableId& room_id) {
     return renderer.update_from_room(design, room_id);
+}
+
+bool populate_furniture_scene(Renderer3D& renderer, const RoomDesign& design,
+                              const FurnitureCatalog& catalog, const StableId& room_id) {
+    return renderer.update_from_room(
+        design, room_id, [&](const Furniture& furniture) -> const MeshAsset* {
+            if (furniture.asset_id.empty()) return nullptr;
+            const AssetLoadResult& loaded = catalog.load(furniture.asset_id);
+            return loaded ? &*loaded.asset : nullptr;
+        });
 }
 
 }  // namespace room_engine

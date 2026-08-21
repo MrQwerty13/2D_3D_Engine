@@ -1,6 +1,7 @@
 #pragma once
 
 #include "room_engine/core/room_design.hpp"
+#include "room_engine/core/stable_id.hpp"
 #include "room_engine/renderer/renderer_2d.hpp"
 #include "room_engine/renderer/renderer_3d.hpp"
 
@@ -8,6 +9,8 @@
 #include <string_view>
 
 namespace room_engine {
+
+class FurnitureCatalog;
 
 struct FurnitureFloorPlanStyle {
     Color floor{235, 235, 230, 255};
@@ -27,9 +30,8 @@ void populate_furniture_floor_plan(Renderer2D&, const Room&,
 // Rebuilds the generated 3D scene from the same validated domain model.
 [[nodiscard]] bool populate_furniture_scene(Renderer3D&, const RoomDesign&,
                                             const StableId& room_id = {});
-
-// Deterministic picking ID used by both adapters; unlike std::hash, this remains
-// stable across processes and supported platforms.
-[[nodiscard]] std::uint64_t stable_scene_id(std::string_view id) noexcept;
+[[nodiscard]] bool populate_furniture_scene(Renderer3D&, const RoomDesign&,
+                                            const FurnitureCatalog&,
+                                            const StableId& room_id = {});
 
 }  // namespace room_engine

@@ -1,5 +1,7 @@
 #include "room_engine/renderer/renderer_2d.hpp"
 
+#include "room_engine/renderer/triangulation.hpp"
+
 #include <algorithm>
 #include <cmath>
 
@@ -51,7 +53,15 @@ void Renderer2D::flush(Renderer& renderer, const RenderMaterial& base_material) 
                     const Vec2 center{(item.bounds.min.x + item.bounds.max.x) * 0.5F, (item.bounds.min.y + item.bounds.max.y) * 0.5F};
                     for (auto& point : points) point = rotate_around(point, center, item.rotation);
                 }
-                for (std::size_t i = 1; i + 1 < points.size(); ++i) add_triangle(points[0], points[i], points[i + 1]);
+                if (item.type == DrawItem2D::Type::Polygon) {
+                    const auto indices = triangulate_simple_polygon<Vec2>(points);
+                    for (std::size_t i = 0; i + 2 < indices.size(); i += 3)
+                        add_triangle(points[indices[i]], points[indices[i + 1]],
+                                     points[indices[i + 2]]);
+                } else {
+                    for (std::size_t i = 1; i + 1 < points.size(); ++i)
+                        add_triangle(points[0], points[i], points[i + 1]);
+                }
             }
         }
         if (!vertices.empty()) renderer.draw(renderer.create_vertex_buffer(vertices), vertices.size(), material);

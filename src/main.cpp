@@ -1,5 +1,6 @@
 #include "room_engine/application.hpp"
 #include "room_engine/core/floor_plan_editor.hpp"
+#include "room_engine/core/stable_id.hpp"
 #include "room_engine/renderer/renderer_2d.hpp"
 #include "room_engine/renderer/renderer_3d.hpp"
 
@@ -93,7 +94,7 @@ int main() {
                 scene.draw_line({{-10.0F, coordinate}, {10.0F, coordinate}, {45, 50, 62, 255}}, -10);
             }
             for (const auto& wall : room.walls) {
-                const auto id = static_cast<std::uint64_t>(std::hash<std::string>{}(wall.id));
+                const auto id = room_engine::stable_scene_id(wall.id);
                 scene.draw_line({{wall.start.x, wall.start.y}, {wall.end.x, wall.end.y}, {210, 215, 225, 255}, wall.thickness * 12.0F}, 0, id);
                 scene.draw_circle({{wall.start.x, wall.start.y}, 0.09F, {90, 190, 245, 255}}, 1, id);
                 scene.draw_circle({{wall.end.x, wall.end.y}, 0.09F, {90, 190, 245, 255}}, 1, id);

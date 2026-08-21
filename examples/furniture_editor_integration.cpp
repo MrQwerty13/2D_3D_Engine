@@ -13,7 +13,7 @@ int main() {
                   {"south", {6, 4}, {0, 4}, .2F, 2.8F, "wood"},
                   {"west", {0, 4}, {0, 0}, .2F, 2.8F, "wood"}};
     room.furniture.push_back({"table", "Table", {{3, .4F, 2}, {}, {1, 1, 1}},
-                              {1.8F, .8F, .9F}, "wood"});
+                              {1.8F, .8F, .9F}, "wood", {}});
     project.rooms.push_back(std::move(room));
 
     room_engine::Viewport2D viewport{1280, 720};

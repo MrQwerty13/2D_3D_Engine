@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <cstddef>
 #include <unordered_map>
 #include <optional>
@@ -98,6 +99,8 @@ struct MeshInstance {
     std::uint64_t id = 0;
 };
 
+using FurnitureAssetResolver = std::function<const MeshAsset*(const Furniture&)>;
+
 class Renderer3D {
 public:
     void begin() noexcept { instances_.clear(); }
@@ -108,10 +111,14 @@ public:
     void set_directional_light(DirectionalLight light) noexcept { directional_ = light; }
     void add_point_light(PointLight light) { points_.push_back(light); }
     void clear_lights() noexcept { points_.clear(); }
+    void set_default_shader(Shader shader) noexcept { default_shader_ = shader; }
+    [[nodiscard]] Shader default_shader() const noexcept { return default_shader_; }
     void set_presentation_controls(PresentationControls controls) noexcept { controls_ = controls; }
     [[nodiscard]] PresentationControls presentation_controls() const noexcept { return controls_; }
     // Rebuilds the scene only when the validated 2D design contains the requested room.
-    [[nodiscard]] bool update_from_room(const RoomDesign& design, const StableId& room_id = {});
+    [[nodiscard]] bool update_from_room(
+        const RoomDesign& design, const StableId& room_id = {},
+        const FurnitureAssetResolver& furniture_assets = {});
     void flush(Renderer& renderer, const Camera& camera);
     [[nodiscard]] std::optional<RayHit> raycast(ScreenPoint screen, const Camera& camera,
                                                 float viewport_width, float viewport_height) const;
@@ -127,6 +134,7 @@ private:
     DirectionalLight directional_{};
     std::vector<PointLight> points_;
     PresentationControls controls_{};
+    Shader default_shader_{};
 };
 
 [[nodiscard]] Mesh make_room_floor(float width = 8.0F, float depth = 6.0F);
@@ -137,7 +145,8 @@ private:
 [[nodiscard]] Mesh make_room_ceiling(const Ceiling& ceiling);
 [[nodiscard]] Mesh make_room_opening(float width, float height, float thickness);
 [[nodiscard]] bool populate_room(Renderer3D& renderer, const RoomDesign& design,
-                                 const StableId& room_id = {});
+                                 const StableId& room_id = {},
+                                 const FurnitureAssetResolver& furniture_assets = {});
 void populate_sample_room(Renderer3D& renderer);
 
 }  // namespace room_engine

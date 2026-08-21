@@ -5,7 +5,7 @@ PKG_CONFIG ?= pkg-config
 CLANG_FORMAT ?= clang-format
 
 CONFIG ?= Debug
-VALID_CONFIGS := Debug Release
+VALID_CONFIGS := Debug Release Sanitize
 ifeq ($(filter $(CONFIG),$(VALID_CONFIGS)),)
 $(error CONFIG must be one of: $(VALID_CONFIGS))
 endif
@@ -21,8 +21,11 @@ LDLIBS :=
 
 ifeq ($(CONFIG),Debug)
 CONFIG_FLAGS := -O0 -g3
-else
+else ifeq ($(CONFIG),Release)
 CONFIG_FLAGS := -O2 -DNDEBUG
+else
+CONFIG_FLAGS := -O1 -g3 -fno-omit-frame-pointer
+SANITIZER_FLAGS := -fsanitize=address,undefined
 endif
 
 SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(SDL3_PKG) 2>/dev/null)
@@ -56,7 +59,7 @@ TEST := $(BUILD_DIR)/room_engine_smoke_tests
 PROFILE := $(BUILD_DIR)/room_engine_profile
 EXAMPLE := $(BUILD_DIR)/furniture_editor_integration
 
-.PHONY: all debug release build libraries example test profile check format format-check clean help verify-tools verify-sdl
+.PHONY: all debug release sanitize build libraries example test profile check format format-check clean help verify-tools verify-sdl
 
 all: debug
 
@@ -65,6 +68,9 @@ debug:
 
 release:
 	$(MAKE) CONFIG=Release build
+
+sanitize:
+	$(MAKE) CONFIG=Sanitize test
 
 build: verify-tools verify-sdl libraries $(APP)
 
@@ -80,24 +86,25 @@ $(LIB_PLATFORM): $(PLATFORM_OBJECTS)
 
 $(APP): $(APP_OBJECTS) $(LIB_PLATFORM) $(LIB_RENDER)
 	@mkdir -p $(@D)
-	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
+	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(SANITIZER_FLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
 
 $(TEST): $(TEST_OBJECTS) $(LIB_RENDER)
 	@mkdir -p $(@D)
-	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
+	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(SANITIZER_FLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
 
 example: $(EXAMPLE)
 	$(EXAMPLE)
 
 $(EXAMPLE): $(EXAMPLE_OBJECTS) $(LIB_RENDER)
 	@mkdir -p $(@D)
-	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
+	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(SANITIZER_FLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
+
+$(TEST_OBJECTS): CPPFLAGS += -UNDEBUG
 
 $(BUILD_DIR)/%.o: %.cpp
 	@mkdir -p $(@D)
-	$(CXX) $(CONFIG_FLAGS) $(CPPFLAGS) $(CXXFLAGS) $(DEPFLAGS) $(SDL_CFLAGS) -c $< -o $@
+	$(CXX) $(CONFIG_FLAGS) $(CPPFLAGS) $(CXXFLAGS) $(SANITIZER_FLAGS) $(DEPFLAGS) $(SDL_CFLAGS) -c $< -o $@
 
-test: CONFIG=Debug
 test: $(TEST)
 	$(TEST)
 
@@ -106,7 +113,7 @@ profile: $(PROFILE)
 
 $(PROFILE): $(BUILD_DIR)/tools/profile_engine.o $(LIB_RENDER)
 	@mkdir -p $(@D)
-	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
+	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(SANITIZER_FLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
 
 check: test format-check
 
@@ -131,8 +138,9 @@ clean:
 	rm -rf out
 
 help:
-	@echo "make [debug|release|libraries|example|test|profile|check|format|clean]"
-	@echo "  CONFIG=Debug|Release selects out/debug or out/release"
+	@echo "make [debug|release|sanitize|libraries|example|test|profile|check|format|clean]"
+	@echo "  CONFIG=Debug|Release|Sanitize selects out/debug, out/release, or out/sanitize"
+	@echo "  sanitize runs the tests with AddressSanitizer and UndefinedBehaviorSanitizer"
 	@echo "  libraries builds reusable static libraries under out/<config>/lib"
 
 -include $(RENDER_OBJECTS:.o=.d) $(PLATFORM_OBJECTS:.o=.d) $(APP_OBJECTS:.o=.d) $(TEST_OBJECTS:.o=.d) $(EXAMPLE_OBJECTS:.o=.d)

@@ -29,6 +29,7 @@ public:
     bool begin_frame(Color clear_color) override {
         if (renderer_ == nullptr) return false;
         vertex_buffers_.resize(1);
+        index_buffers_.resize(1);
         SDL_SetRenderDrawColor(renderer_, clear_color.r, clear_color.g, clear_color.b, clear_color.a);
         return SDL_RenderClear(renderer_);
     }
@@ -44,10 +45,10 @@ public:
                 const auto projected = project(data[i]);
                 if (!projected.has_value()) continue;
                 sdl_vertices.push_back({{projected->first, projected->second},
-                                        {static_cast<float>(data[i].color.r),
-                                         static_cast<float>(data[i].color.g),
-                                         static_cast<float>(data[i].color.b),
-                                         static_cast<float>(data[i].color.a)},
+                                        {static_cast<float>(data[i].color.r) / 255.0F,
+                                         static_cast<float>(data[i].color.g) / 255.0F,
+                                         static_cast<float>(data[i].color.b) / 255.0F,
+                                         static_cast<float>(data[i].color.a) / 255.0F},
                                         {data[i].uv.x, data[i].uv.y}});
             }
             if (sdl_vertices.size() >= 3) SDL_RenderGeometry(renderer_, texture(material.base_color_texture), sdl_vertices.data(),
@@ -63,23 +64,63 @@ public:
             SDL_RenderLine(renderer_, start->first, start->second, end->first, end->second);
         }
     }
-    void draw(const VertexBuffer& vertices, const IndexBuffer&, std::size_t vertex_count,
-              const RenderMaterial& material) override { draw(vertices, vertex_count, material); }
+    void draw(const VertexBuffer& vertices, const IndexBuffer& indices,
+              std::size_t index_count, const RenderMaterial& material) override {
+        if (!vertices.valid() || !indices.valid() ||
+            vertices.id >= vertex_buffers_.size() || indices.id >= index_buffers_.size())
+            return;
+        const auto& source_vertices = vertex_buffers_[vertices.id];
+        const auto& source_indices = index_buffers_[indices.id];
+        std::vector<Vertex> expanded;
+        const std::size_t count = std::min(index_count, source_indices.size());
+        expanded.reserve(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            const std::uint16_t index = source_indices[i];
+            if (index >= source_vertices.size()) return;
+            expanded.push_back(source_vertices[index]);
+        }
+        const VertexBuffer expanded_buffer = create_vertex_buffer(expanded);
+        if (expanded_buffer.valid()) draw(expanded_buffer, expanded.size(), material);
+    }
     VertexBuffer create_vertex_buffer(std::span<const Vertex> vertices) override {
+        if (vertices.empty() ||
+            vertex_buffers_.size() >=
+                static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max()))
+            return {};
         vertex_buffers_.emplace_back(vertices.begin(), vertices.end());
         return {static_cast<std::uint16_t>(vertex_buffers_.size() - 1)};
     }
-    IndexBuffer create_index_buffer(std::span<const std::uint16_t>) override { return {next_id_++}; }
+    IndexBuffer create_index_buffer(std::span<const std::uint16_t> indices) override {
+        if (indices.empty() ||
+            index_buffers_.size() >=
+                static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max()))
+            return {};
+        index_buffers_.emplace_back(indices.begin(), indices.end());
+        return {static_cast<std::uint16_t>(index_buffers_.size() - 1)};
+    }
     Shader load_shader(std::span<const std::byte>, std::span<const std::byte>) override {
+        if (next_id_ == std::numeric_limits<std::uint16_t>::max()) return {};
         return {next_id_++};
     }
     Texture create_texture(std::uint32_t width, std::uint32_t height,
                            std::span<const std::byte> rgba8) override {
+        const std::uint64_t required_bytes = static_cast<std::uint64_t>(width) *
+                                             static_cast<std::uint64_t>(height) * 4U;
+        if (renderer_ == nullptr || width == 0 || height == 0 ||
+            width > static_cast<std::uint32_t>(std::numeric_limits<int>::max() / 4) ||
+            height > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
+            required_bytes > rgba8.size() ||
+            textures_.size() >=
+                static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max()))
+            return {};
         SDL_Texture* texture = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32,
                                                   SDL_TEXTUREACCESS_STATIC,
                                                   static_cast<int>(width), static_cast<int>(height));
-        if (texture != nullptr) SDL_UpdateTexture(texture, nullptr, rgba8.data(),
-                                                   static_cast<int>(width * 4U));
+        if (texture == nullptr ||
+            !SDL_UpdateTexture(texture, nullptr, rgba8.data(), static_cast<int>(width * 4U))) {
+            if (texture != nullptr) SDL_DestroyTexture(texture);
+            return {};
+        }
         textures_.push_back(texture);
         return {static_cast<std::uint16_t>(textures_.size() - 1)};
     }
@@ -128,6 +169,7 @@ private:
 
     SDL_Renderer* renderer_ = nullptr;
     std::vector<std::vector<Vertex>> vertex_buffers_{{}};
+    std::vector<std::vector<std::uint16_t>> index_buffers_{{}};
     std::vector<SDL_Texture*> textures_{nullptr};
     Mat4 view_projection_ = Mat4::identity();
     std::uint16_t next_id_ = 1;
@@ -173,20 +215,38 @@ public:
         bgfx::setViewTransform(0, nullptr, view_projection_.data());
     }
     void draw(const VertexBuffer& vertices, std::size_t vertex_count, const RenderMaterial& material) override {
-        if (!initialized_ || !vertices.valid() || !material.shader.valid()) return;
+        if (!initialized_ || !vertices.valid() || !material.shader.valid() ||
+            vertices.id >= vertex_buffers_.size() || material.shader.id >= shaders_.size() ||
+            !bgfx::isValid(vertex_buffers_[vertices.id]) ||
+            !bgfx::isValid(shaders_[material.shader.id]))
+            return;
         bgfx::setVertexBuffer(0, vertex_buffers_[vertices.id]);
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS |
-                       BGFX_STATE_MSAA | (material.double_sided ? 0U : BGFX_STATE_CULL_CW));
+        const std::uint64_t topology = material.topology == PrimitiveTopology::Lines
+                                           ? BGFX_STATE_PT_LINES
+                                           : 0U;
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                       BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_MSAA | topology |
+                       (material.double_sided ? 0U : BGFX_STATE_CULL_CW));
         bgfx::submit(0, shaders_[material.shader.id]);
         (void)vertex_count;
     }
     void draw(const VertexBuffer& vertices, const IndexBuffer& indices, std::size_t index_count,
               const RenderMaterial& material) override {
-        if (!initialized_ || !vertices.valid() || !indices.valid() || !material.shader.valid()) return;
+        if (!initialized_ || !vertices.valid() || !indices.valid() ||
+            !material.shader.valid() || vertices.id >= vertex_buffers_.size() ||
+            indices.id >= index_buffers_.size() || material.shader.id >= shaders_.size() ||
+            !bgfx::isValid(vertex_buffers_[vertices.id]) ||
+            !bgfx::isValid(index_buffers_[indices.id]) ||
+            !bgfx::isValid(shaders_[material.shader.id]))
+            return;
         bgfx::setVertexBuffer(0, vertex_buffers_[vertices.id]);
         bgfx::setIndexBuffer(index_buffers_[indices.id], 0, static_cast<std::uint32_t>(index_count));
-        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_LESS |
-                       BGFX_STATE_MSAA | (material.double_sided ? 0U : BGFX_STATE_CULL_CW));
+        const std::uint64_t topology = material.topology == PrimitiveTopology::Lines
+                                           ? BGFX_STATE_PT_LINES
+                                           : 0U;
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                       BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_MSAA | topology |
+                       (material.double_sided ? 0U : BGFX_STATE_CULL_CW));
         bgfx::submit(0, shaders_[material.shader.id]);
     }
     VertexBuffer create_vertex_buffer(std::span<const Vertex> vertices) override {
@@ -206,22 +266,48 @@ public:
     }
     Shader load_shader(std::span<const std::byte> vertex_binary,
                        std::span<const std::byte> fragment_binary) override {
+        if (!initialized_ || vertex_binary.empty() || fragment_binary.empty() ||
+            vertex_binary.size_bytes() > std::numeric_limits<std::uint32_t>::max() ||
+            fragment_binary.size_bytes() > std::numeric_limits<std::uint32_t>::max() ||
+            shaders_.size() >=
+                static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max()))
+            return {};
         const auto handle = static_cast<std::uint16_t>(shaders_.size());
-        const bgfx::ShaderHandle vertex = bgfx::createShader(bgfx::makeRef(vertex_binary.data(),
-                                                                            static_cast<std::uint32_t>(vertex_binary.size_bytes())));
-        const bgfx::ShaderHandle fragment = bgfx::createShader(bgfx::makeRef(fragment_binary.data(),
-                                                                              static_cast<std::uint32_t>(fragment_binary.size_bytes())));
-        programs_.push_back(bgfx::createProgram(vertex, fragment, true));
-        shaders_.push_back(programs_.back());
+        const bgfx::ShaderHandle vertex = bgfx::createShader(
+            bgfx::copy(vertex_binary.data(),
+                       static_cast<std::uint32_t>(vertex_binary.size_bytes())));
+        const bgfx::ShaderHandle fragment = bgfx::createShader(
+            bgfx::copy(fragment_binary.data(),
+                       static_cast<std::uint32_t>(fragment_binary.size_bytes())));
+        if (!bgfx::isValid(vertex) || !bgfx::isValid(fragment)) {
+            if (bgfx::isValid(vertex)) bgfx::destroy(vertex);
+            if (bgfx::isValid(fragment)) bgfx::destroy(fragment);
+            return {};
+        }
+        const bgfx::ProgramHandle program = bgfx::createProgram(vertex, fragment, true);
+        if (!bgfx::isValid(program)) return {};
+        shaders_.push_back(program);
         return {handle};
     }
     Texture create_texture(std::uint32_t width, std::uint32_t height,
                            std::span<const std::byte> rgba8) override {
+        const std::uint64_t required_bytes = static_cast<std::uint64_t>(width) *
+                                             static_cast<std::uint64_t>(height) * 4U;
+        if (!initialized_ || width == 0 || height == 0 ||
+            width > std::numeric_limits<std::uint16_t>::max() ||
+            height > std::numeric_limits<std::uint16_t>::max() ||
+            required_bytes > rgba8.size() ||
+            required_bytes > std::numeric_limits<std::uint32_t>::max() ||
+            textures_.size() >=
+                static_cast<std::size_t>(std::numeric_limits<std::uint16_t>::max()))
+            return {};
         const auto handle = static_cast<std::uint16_t>(textures_.size());
-        textures_.push_back(bgfx::createTexture2D(static_cast<std::uint16_t>(width),
-                                                  static_cast<std::uint16_t>(height), false, 1,
-                                                  bgfx::TextureFormat::RGBA8, 0,
-                                                  bgfx::copy(rgba8.data(), static_cast<std::uint32_t>(rgba8.size_bytes()))));
+        const auto texture = bgfx::createTexture2D(
+            static_cast<std::uint16_t>(width), static_cast<std::uint16_t>(height), false,
+            1, bgfx::TextureFormat::RGBA8, 0,
+            bgfx::copy(rgba8.data(), static_cast<std::uint32_t>(required_bytes)));
+        if (!bgfx::isValid(texture)) return {};
+        textures_.push_back(texture);
         return {handle};
     }
     void end_frame() override { if (initialized_) bgfx::frame(); }
@@ -255,7 +341,6 @@ private:
     std::vector<bgfx::VertexBufferHandle> vertex_buffers_{{bgfx::kInvalidHandle}};
     std::vector<bgfx::IndexBufferHandle> index_buffers_{{bgfx::kInvalidHandle}};
     std::vector<bgfx::ProgramHandle> shaders_{{bgfx::kInvalidHandle}};
-    std::vector<bgfx::ProgramHandle> programs_;
     std::vector<bgfx::TextureHandle> textures_{{bgfx::kInvalidHandle}};
 };
 #endif

@@ -1,11 +1,12 @@
 #pragma once
 
-#include "room_engine/core/room_design.hpp"
+#include "room_engine/core/placement.hpp"
 #include "room_engine/renderer/renderer_3d.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <limits>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -16,6 +17,7 @@ namespace room_engine {
 
 enum class FurnitureCategory { Seating, Tables, Storage, Beds, Lighting, Decor, Other };
 enum class WallAlignment { Free, Flush, Centered };
+enum class PlacementMode { Warn, Strict };
 
 struct FurnitureAssetMetadata {
     StableId id;
@@ -35,6 +37,8 @@ struct FurniturePlacement {
     StableId wall_id;
     float wall_offset = 0.0F;
     bool align_to_wall = false;
+    bool rest_on_floor = true;
+    PlacementMode mode = PlacementMode::Warn;
 };
 
 struct PlacementWarning {
@@ -68,22 +72,22 @@ private:
 };
 
 namespace detail {
-inline bool finite(Vec3 v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
-inline bool positive(Vec3 v) { return finite(v) && v.x > 0.0F && v.y > 0.0F && v.z > 0.0F; }
-inline float yaw(const Quaternion& q) { return std::atan2(2.0F * (q.w * q.y + q.x * q.z), 1.0F - 2.0F * (q.y * q.y + q.x * q.x)); }
-inline Vec3 footprint(Vec3 dimensions, float angle) {
-    const float c = std::fabs(std::cos(angle));
-    const float s = std::fabs(std::sin(angle));
-    return {dimensions.x * c + dimensions.z * s, dimensions.y, dimensions.x * s + dimensions.z * c};
-}
-inline bool overlap(const Furniture& a, Vec3 a_size, const Furniture& b, Vec3 b_size) {
-    return std::fabs(a.transform.position.x - b.transform.position.x) < (a_size.x + b_size.x) * 0.5F &&
-           std::fabs(a.transform.position.z - b.transform.position.z) < (a_size.z + b_size.z) * 0.5F;
+inline bool catalog_id_in_use(const Room& room, const StableId& id) {
+    return room.id == id || (room.floor && room.floor->id == id) ||
+           (room.ceiling && room.ceiling->id == id) ||
+           std::any_of(room.walls.begin(), room.walls.end(),
+                       [&](const auto& item) { return item.id == id; }) ||
+           std::any_of(room.doors.begin(), room.doors.end(),
+                       [&](const auto& item) { return item.id == id; }) ||
+           std::any_of(room.windows.begin(), room.windows.end(),
+                       [&](const auto& item) { return item.id == id; }) ||
+           std::any_of(room.furniture.begin(), room.furniture.end(),
+                       [&](const auto& item) { return item.id == id; });
 }
 inline StableId catalog_next_id(const Room& room, const StableId& base) {
     StableId id = base;
     std::size_t suffix = 1;
-    while (std::any_of(room.furniture.begin(), room.furniture.end(), [&](const Furniture& item) { return item.id == id; })) id = base + "-" + std::to_string(suffix++);
+    while (catalog_id_in_use(room, id)) id = base + "-" + std::to_string(suffix++);
     return id;
 }
 }  // namespace detail
@@ -93,7 +97,9 @@ inline bool FurnitureCatalog::add(FurnitureAssetMetadata metadata, std::string* 
     if (metadata.id.empty()) return fail("furniture asset ID must not be empty");
     if (metadata.name.empty()) return fail("furniture asset name must not be empty");
     if (metadata.model.empty()) return fail("furniture asset model path must not be empty");
-    if (!detail::positive(metadata.default_scale)) return fail("furniture asset default scale must be positive and finite");
+    if (!is_finite_vector(metadata.default_scale) || metadata.default_scale.x <= 0.0F ||
+        metadata.default_scale.y <= 0.0F || metadata.default_scale.z <= 0.0F)
+        return fail("furniture asset default scale must be positive and finite");
     if (assets_.contains(metadata.id)) return fail("duplicate furniture asset: " + metadata.id);
     assets_.emplace(metadata.id, std::move(metadata));
     return true;
@@ -126,29 +132,122 @@ inline FurniturePlacementResult FurnitureCatalog::place(Room& room, const Stable
     if (!metadata) { result.error = "unknown furniture asset: " + asset_id; return result; }
     const auto& loaded = load(asset_id);
     if (!loaded) { result.error = "unable to load furniture asset '" + asset_id + "': " + loaded.error; return result; }
-    if (!detail::positive(placement.scale)) { result.error = "furniture placement scale must be positive and finite"; return result; }
-    const Vec3 dimensions = loaded.asset->bounds.valid() ? loaded.asset->bounds.dimensions() : metadata->bounds.dimensions();
-    if (!detail::positive(dimensions)) { result.error = "furniture asset has no valid bounding box: " + asset_id; return result; }
-    placement.scale = {placement.scale.x * metadata->default_scale.x, placement.scale.y * metadata->default_scale.y, placement.scale.z * metadata->default_scale.z};
+    if (!is_finite_vector(placement.position) || !is_finite_vector(placement.scale) ||
+        placement.scale.x <= 0.0F || placement.scale.y <= 0.0F ||
+        placement.scale.z <= 0.0F || !is_finite_quaternion(placement.rotation)) {
+        result.error = "furniture placement transform must be finite with positive scale";
+        return result;
+    }
+    const double rotation_norm_squared =
+        static_cast<double>(placement.rotation.w) * placement.rotation.w +
+        static_cast<double>(placement.rotation.x) * placement.rotation.x +
+        static_cast<double>(placement.rotation.y) * placement.rotation.y +
+        static_cast<double>(placement.rotation.z) * placement.rotation.z;
+    if (!std::isfinite(rotation_norm_squared) || rotation_norm_squared <= 0.0) {
+        result.error = "furniture placement rotation must not be zero";
+        return result;
+    }
+    const float inverse_rotation_norm =
+        static_cast<float>(1.0 / std::sqrt(rotation_norm_squared));
+    placement.rotation = {placement.rotation.w * inverse_rotation_norm,
+                          placement.rotation.x * inverse_rotation_norm,
+                          placement.rotation.y * inverse_rotation_norm,
+                          placement.rotation.z * inverse_rotation_norm};
+    placement.scale = {placement.scale.x * metadata->default_scale.x,
+                       placement.scale.y * metadata->default_scale.y,
+                       placement.scale.z * metadata->default_scale.z};
+    if (!is_finite_vector(placement.scale) || placement.scale.x <= 0.0F ||
+        placement.scale.y <= 0.0F || placement.scale.z <= 0.0F) {
+        result.error = "combined furniture scale is outside the supported range";
+        return result;
+    }
+    const Vec3 dimensions = loaded.asset->bounds.valid()
+                                ? loaded.asset->bounds.dimensions()
+                                : metadata->bounds.dimensions();
+    if (!is_finite_vector(dimensions) || dimensions.x <= 0.0F || dimensions.y <= 0.0F ||
+        dimensions.z <= 0.0F) {
+        result.error = "furniture asset has no valid bounding box: " + asset_id;
+        return result;
+    }
+    if (placement.rest_on_floor) {
+        const float elevation = room.floor ? room.floor->elevation : 0.0F;
+        const float world_height = dimensions.y * placement.scale.y;
+        if (!std::isfinite(elevation) || !std::isfinite(world_height)) {
+            result.error = "furniture floor placement is outside the supported range";
+            return result;
+        }
+        placement.position.y = elevation + world_height * 0.5F;
+    }
+
+    const WallSegment* aligned_wall = nullptr;
     if (placement.align_to_wall || !placement.wall_id.empty()) {
         const auto wall = std::find_if(room.walls.begin(), room.walls.end(), [&](const WallSegment& item) { return item.id == placement.wall_id; });
         if (wall == room.walls.end()) { result.error = "wall alignment references unknown wall: " + placement.wall_id; return result; }
         const float length = std::hypot(wall->end.x - wall->start.x, wall->end.y - wall->start.y);
-        if (!std::isfinite(placement.wall_offset) || placement.wall_offset < 0.0F || placement.wall_offset > length) { result.error = "wall offset is outside the wall"; return result; }
+        if (!std::isfinite(length) || length <= 0.0001F ||
+            !std::isfinite(placement.wall_offset) || placement.wall_offset < 0.0F ||
+            placement.wall_offset > length) {
+            result.error = "wall offset is outside the wall";
+            return result;
+        }
         const float angle = std::atan2(-(wall->end.y - wall->start.y), wall->end.x - wall->start.x);
         placement.rotation = Quaternion::from_axis_angle({0.0F, 1.0F, 0.0F}, angle) * placement.rotation;
         const float center = placement.wall_offset;
         const float depth = dimensions.z * placement.scale.z;
-        const float offset = metadata->wall_alignment == WallAlignment::Free ? 0.0F : wall->thickness * 0.5F + depth * 0.5F;
+        const float offset = metadata->wall_alignment == WallAlignment::Flush
+                                 ? wall->thickness * 0.5F + depth * 0.5F
+                                 : 0.0F;
         placement.position = {wall->start.x + std::cos(angle) * center + std::sin(angle) * offset, placement.position.y,
                               wall->start.y - std::sin(angle) * center + std::cos(angle) * offset};
+        aligned_wall = &*wall;
     }
-    Furniture item{furniture_id.empty() ? detail::catalog_next_id(room, asset_id) : std::move(furniture_id), metadata->name,
-                    {placement.position, placement.rotation, placement.scale}, {dimensions.x * placement.scale.x, dimensions.y * placement.scale.y, dimensions.z * placement.scale.z}, {}};
-    const Vec3 item_footprint = detail::footprint(item.dimensions, detail::yaw(item.transform.rotation));
+
+    if (!furniture_id.empty() && detail::catalog_id_in_use(room, furniture_id)) {
+        result.error = "duplicate furniture ID: " + furniture_id;
+        return result;
+    }
+    Furniture item{furniture_id.empty() ? detail::catalog_next_id(room, asset_id)
+                                        : std::move(furniture_id),
+                   metadata->name,
+                   {placement.position, placement.rotation, placement.scale},
+                   dimensions,
+                   {},
+                   asset_id};
+    if (aligned_wall != nullptr) {
+        const FurnitureFootprint footprint = furniture_footprint_corners(item);
+        const float wall_length = std::hypot(aligned_wall->end.x - aligned_wall->start.x,
+                                             aligned_wall->end.y - aligned_wall->start.y);
+        const Point2 direction{(aligned_wall->end.x - aligned_wall->start.x) / wall_length,
+                               (aligned_wall->end.y - aligned_wall->start.y) / wall_length};
+        float minimum = std::numeric_limits<float>::max();
+        float maximum = std::numeric_limits<float>::lowest();
+        for (const Point2 corner : footprint) {
+            const float projected = (corner.x - aligned_wall->start.x) * direction.x +
+                                    (corner.y - aligned_wall->start.y) * direction.y;
+            minimum = std::min(minimum, projected);
+            maximum = std::max(maximum, projected);
+        }
+        if (minimum < -placement_geometry_tolerance ||
+            maximum > wall_length + placement_geometry_tolerance) {
+            result.error = "wall-aligned furniture extends beyond the wall ends";
+            return result;
+        }
+    }
+    if (room.floor && !furniture_footprint_inside_floor(item, *room.floor))
+        result.warnings.push_back({item.id, "furniture extends outside the room floor"});
+    const Vec3 item_size = scaled_furniture_dimensions(item);
     for (const auto& other : room.furniture) {
-        const Vec3 other_size = detail::footprint(other.dimensions, detail::yaw(other.transform.rotation));
-        if (detail::overlap(item, item_footprint, other, other_size)) result.warnings.push_back({other.id, "furniture overlaps '" + other.name + "'"});
+        const Vec3 other_size = scaled_furniture_dimensions(other);
+        const bool overlaps_vertically =
+            std::fabs(item.transform.position.y - other.transform.position.y) <
+            (item_size.y + other_size.y) * 0.5F;
+        if (overlaps_vertically && furniture_footprints_overlap(item, other))
+            result.warnings.push_back({other.id,
+                                       "furniture overlaps '" + other.name + "'"});
+    }
+    if (placement.mode == PlacementMode::Strict && !result.warnings.empty()) {
+        result.error = result.warnings.front().message;
+        return result;
     }
     room.furniture.push_back(item);
     result.furniture = std::move(item);

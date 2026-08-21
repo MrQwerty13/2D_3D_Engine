@@ -12,6 +12,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -76,6 +77,9 @@ struct Furniture {
     Transform transform{};
     Vec3 dimensions{1.0F, 1.0F, 1.0F};
     StableId material_id;
+    // Catalog provenance is persisted separately from the display name so an
+    // application can resolve the same GLB asset after a project is reopened.
+    StableId asset_id;
 };
 
 struct Material {
@@ -103,7 +107,7 @@ struct ValidationIssue {
 };
 
 struct RoomDesign {
-    static constexpr std::uint32_t current_version = 1;
+    static constexpr std::uint32_t current_version = 2;
     std::uint32_t version = current_version;
     std::vector<Material> materials;
     std::vector<Room> rooms;
@@ -120,6 +124,15 @@ inline float length(Point2 a, Point2 b) {
 }
 inline bool positive(float value) { return finite(value) && value > 0.0F; }
 inline bool nonnegative(float value) { return finite(value) && value >= 0.0F; }
+inline bool finite_vec3(Vec3 value) {
+    return finite(value.x) && finite(value.y) && finite(value.z);
+}
+inline bool positive_vec3(Vec3 value) {
+    return finite_vec3(value) && value.x > 0.0F && value.y > 0.0F && value.z > 0.0F;
+}
+inline bool finite_quaternion(Quaternion value) {
+    return finite(value.w) && finite(value.x) && finite(value.y) && finite(value.z);
+}
 
 inline void issue(std::vector<ValidationIssue>& result, std::string path, std::string message) {
     result.push_back({std::move(path), std::move(message)});
@@ -142,17 +155,81 @@ inline bool has_id(const std::unordered_set<std::string>& ids, const StableId& i
     return !id.empty() && ids.contains(id);
 }
 
+inline double cross(Point2 a, Point2 b, Point2 c) {
+    return static_cast<double>(b.x - a.x) * static_cast<double>(c.y - a.y) -
+           static_cast<double>(b.y - a.y) * static_cast<double>(c.x - a.x);
+}
+
+inline bool point_on_segment(Point2 point, Point2 start, Point2 end) {
+    constexpr double epsilon = 1.0e-8;
+    if (std::fabs(cross(start, end, point)) > epsilon) return false;
+    return static_cast<double>(point.x) >=
+               std::min(static_cast<double>(start.x), static_cast<double>(end.x)) - epsilon &&
+           static_cast<double>(point.x) <=
+               std::max(static_cast<double>(start.x), static_cast<double>(end.x)) + epsilon &&
+           static_cast<double>(point.y) >=
+               std::min(static_cast<double>(start.y), static_cast<double>(end.y)) - epsilon &&
+           static_cast<double>(point.y) <=
+               std::max(static_cast<double>(start.y), static_cast<double>(end.y)) + epsilon;
+}
+
+inline int orientation(Point2 a, Point2 b, Point2 c) {
+    constexpr double epsilon = 1.0e-8;
+    const double value = cross(a, b, c);
+    return value > epsilon ? 1 : value < -epsilon ? -1 : 0;
+}
+
+inline bool segments_intersect(Point2 a, Point2 b, Point2 c, Point2 d) {
+    const int abc = orientation(a, b, c);
+    const int abd = orientation(a, b, d);
+    const int cda = orientation(c, d, a);
+    const int cdb = orientation(c, d, b);
+    if (abc != abd && cda != cdb) return true;
+    return (abc == 0 && point_on_segment(c, a, b)) ||
+           (abd == 0 && point_on_segment(d, a, b)) ||
+           (cda == 0 && point_on_segment(a, c, d)) ||
+           (cdb == 0 && point_on_segment(b, c, d));
+}
+
+inline std::optional<std::string> polygon_error(const std::vector<Point2>& boundary) {
+    if (boundary.size() < 3) return "must contain at least three points";
+    for (std::size_t i = 0; i < boundary.size(); ++i) {
+        const Point2 point = boundary[i];
+        if (!finite(point.x) || !finite(point.y)) return "must contain only finite points";
+        if (length(point, boundary[(i + 1) % boundary.size()]) <= 0.0001F)
+            return "must not contain duplicate adjacent points";
+    }
+
+    double twice_area = 0.0;
+    for (std::size_t i = 0; i < boundary.size(); ++i) {
+        const Point2 a = boundary[i];
+        const Point2 b = boundary[(i + 1) % boundary.size()];
+        twice_area += static_cast<double>(a.x) * static_cast<double>(b.y) -
+                      static_cast<double>(b.x) * static_cast<double>(a.y);
+    }
+    if (!std::isfinite(twice_area) || std::fabs(twice_area) <= 1.0e-8)
+        return "must enclose a non-zero finite area";
+
+    for (std::size_t i = 0; i < boundary.size(); ++i) {
+        const std::size_t i_next = (i + 1) % boundary.size();
+        for (std::size_t j = i + 1; j < boundary.size(); ++j) {
+            const std::size_t j_next = (j + 1) % boundary.size();
+            if (i == j || i_next == j || j_next == i) continue;
+            if (segments_intersect(boundary[i], boundary[i_next], boundary[j],
+                                   boundary[j_next]))
+                return "must not self-intersect";
+        }
+    }
+    return std::nullopt;
+}
+
 inline void write_point(std::ostream& out, Point2 point) { out << point.x << ' ' << point.y << ' '; }
-inline Point2 read_point(std::istream& in) {
-    Point2 point;
-    in >> point.x >> point.y;
-    return point;
+inline bool read_point(std::istream& in, Point2& point) {
+    return static_cast<bool>(in >> point.x >> point.y);
 }
 inline void write_vec3(std::ostream& out, Vec3 value) { out << value.x << ' ' << value.y << ' ' << value.z << ' '; }
-inline Vec3 read_vec3(std::istream& in) {
-    Vec3 value;
-    in >> value.x >> value.y >> value.z;
-    return value;
+inline bool read_vec3(std::istream& in, Vec3& value) {
+    return static_cast<bool>(in >> value.x >> value.y >> value.z);
 }
 inline void write_transform(std::ostream& out, const Transform& value) {
     write_vec3(out, value.position);
@@ -160,12 +237,11 @@ inline void write_transform(std::ostream& out, const Transform& value) {
         << value.rotation.z << ' ';
     write_vec3(out, value.scale);
 }
-inline Transform read_transform(std::istream& in) {
-    Transform value;
-    value.position = read_vec3(in);
-    in >> value.rotation.w >> value.rotation.x >> value.rotation.y >> value.rotation.z;
-    value.scale = read_vec3(in);
-    return value;
+inline bool read_transform(std::istream& in, Transform& value) {
+    return read_vec3(in, value.position) &&
+           static_cast<bool>(in >> value.rotation.w >> value.rotation.x >> value.rotation.y >>
+                             value.rotation.z) &&
+           read_vec3(in, value.scale);
 }
 inline void write_string(std::ostream& out, std::string_view value) { out << std::quoted(value) << ' '; }
 inline bool read_string(std::istream& in, std::string& value) { return static_cast<bool>(in >> std::quoted(value)); }
@@ -174,17 +250,23 @@ inline bool read_string(std::istream& in, std::string& value) { return static_ca
 
 inline std::vector<ValidationIssue> RoomDesign::validate() const {
     std::vector<ValidationIssue> result;
-    if (version != current_version) detail::issue(result, "version", "unsupported schema version");
+    if (version != current_version)
+        detail::issue(result, "version", "unsupported schema version");
 
     std::unordered_set<std::string> ids;
     std::unordered_set<std::string> material_ids;
     for (std::size_t i = 0; i < materials.size(); ++i) {
         const auto path = "materials[" + std::to_string(i) + "]";
-        if (detail::add_id(ids, materials[i].id, path + ".id", result)) material_ids.insert(materials[i].id);
-        if (!detail::finite(materials[i].roughness) || materials[i].roughness < 0.0F || materials[i].roughness > 1.0F)
+        if (detail::add_id(ids, materials[i].id, path + ".id", result))
+            material_ids.insert(materials[i].id);
+        if (!detail::finite(materials[i].roughness) || materials[i].roughness < 0.0F ||
+            materials[i].roughness > 1.0F)
             detail::issue(result, path + ".roughness", "must be between 0 and 1");
-        if (!detail::finite(materials[i].albedo.x) || !detail::finite(materials[i].albedo.y) || !detail::finite(materials[i].albedo.z))
-            detail::issue(result, path + ".albedo", "must contain finite values");
+        const Vec3 albedo = materials[i].albedo;
+        if (!detail::finite_vec3(albedo) || albedo.x < 0.0F || albedo.x > 1.0F ||
+            albedo.y < 0.0F || albedo.y > 1.0F || albedo.z < 0.0F ||
+            albedo.z > 1.0F)
+            detail::issue(result, path + ".albedo", "must contain values between 0 and 1");
     }
 
     for (std::size_t ri = 0; ri < rooms.size(); ++ri) {
@@ -197,47 +279,121 @@ inline std::vector<ValidationIssue> RoomDesign::validate() const {
             const WallSegment& wall = room.walls[wi];
             detail::add_id(ids, wall.id, path + ".id", result);
             if (!detail::add_id(wall_ids, wall.id, path + ".id", result)) continue;
-            if (!detail::positive(wall.thickness)) detail::issue(result, path + ".thickness", "must be positive and finite");
-            if (!detail::positive(wall.height)) detail::issue(result, path + ".height", "must be positive and finite");
-            if (!detail::finite(wall.start.x) || !detail::finite(wall.start.y) || !detail::finite(wall.end.x) || !detail::finite(wall.end.y) || detail::length(wall.start, wall.end) <= 0.0001F)
+            if (!detail::positive(wall.thickness))
+                detail::issue(result, path + ".thickness", "must be positive and finite");
+            if (!detail::positive(wall.height))
+                detail::issue(result, path + ".height", "must be positive and finite");
+            if (!detail::finite(wall.start.x) || !detail::finite(wall.start.y) ||
+                !detail::finite(wall.end.x) || !detail::finite(wall.end.y) ||
+                detail::length(wall.start, wall.end) <= 0.0001F)
                 detail::issue(result, path, "wall endpoints must be finite and distinct");
-            if (!wall.material_id.empty() && !detail::has_id(material_ids, wall.material_id)) detail::issue(result, path + ".material_id", "references an unknown material");
+            if (!wall.material_id.empty() &&
+                !detail::has_id(material_ids, wall.material_id))
+                detail::issue(result, path + ".material_id",
+                              "references an unknown material");
         }
-        if (room.floor && room.floor->boundary.size() < 3) detail::issue(result, base + ".floor.boundary", "must contain at least three points");
-        if (room.ceiling && room.ceiling->boundary.size() < 3) detail::issue(result, base + ".ceiling.boundary", "must contain at least three points");
+
         if (room.floor) {
             detail::add_id(ids, room.floor->id, base + ".floor.id", result);
-            if (!room.floor->material_id.empty() && !detail::has_id(material_ids, room.floor->material_id)) detail::issue(result, base + ".floor.material_id", "references an unknown material");
+            if (const auto error = detail::polygon_error(room.floor->boundary))
+                detail::issue(result, base + ".floor.boundary", *error);
+            if (!detail::finite(room.floor->elevation))
+                detail::issue(result, base + ".floor.elevation", "must be finite");
+            if (!room.floor->material_id.empty() &&
+                !detail::has_id(material_ids, room.floor->material_id))
+                detail::issue(result, base + ".floor.material_id",
+                              "references an unknown material");
         }
         if (room.ceiling) {
             detail::add_id(ids, room.ceiling->id, base + ".ceiling.id", result);
-            if (!room.ceiling->material_id.empty() && !detail::has_id(material_ids, room.ceiling->material_id)) detail::issue(result, base + ".ceiling.material_id", "references an unknown material");
+            if (const auto error = detail::polygon_error(room.ceiling->boundary))
+                detail::issue(result, base + ".ceiling.boundary", *error);
+            if (!detail::finite(room.ceiling->elevation))
+                detail::issue(result, base + ".ceiling.elevation", "must be finite");
+            if (!room.ceiling->material_id.empty() &&
+                !detail::has_id(material_ids, room.ceiling->material_id))
+                detail::issue(result, base + ".ceiling.material_id",
+                              "references an unknown material");
         }
+        if (room.floor && room.ceiling && detail::finite(room.floor->elevation) &&
+            detail::finite(room.ceiling->elevation) &&
+            room.ceiling->elevation <= room.floor->elevation)
+            detail::issue(result, base + ".ceiling.elevation",
+                          "must be above the floor elevation");
 
-        std::vector<std::pair<float, float>> occupied;
+        struct OpeningRange {
+            float start = 0.0F;
+            float end = 0.0F;
+        };
+        std::unordered_map<StableId, std::vector<OpeningRange>> occupied_by_wall;
         auto validate_opening = [&](const auto& opening, std::string path) {
             detail::add_id(ids, opening.id, path + ".id", result);
-            if (!detail::has_id(wall_ids, opening.wall_id)) detail::issue(result, path + ".wall_id", "references an unknown wall");
-            const auto wall_it = std::find_if(room.walls.begin(), room.walls.end(), [&](const WallSegment& w) { return w.id == opening.wall_id; });
-            const float wall_length = wall_it == room.walls.end() ? 0.0F : detail::length(wall_it->start, wall_it->end);
-            if (!detail::nonnegative(opening.offset) || !detail::positive(opening.width) || opening.offset + opening.width > wall_length + 0.0001F)
+            if (!detail::has_id(wall_ids, opening.wall_id))
+                detail::issue(result, path + ".wall_id", "references an unknown wall");
+            const auto wall_it = std::find_if(
+                room.walls.begin(), room.walls.end(),
+                [&](const WallSegment& wall) { return wall.id == opening.wall_id; });
+            const float wall_length = wall_it == room.walls.end()
+                                          ? 0.0F
+                                          : detail::length(wall_it->start, wall_it->end);
+            const float opening_end = opening.offset + opening.width;
+            if (!detail::nonnegative(opening.offset) || !detail::positive(opening.width) ||
+                !detail::finite(opening_end) || opening_end > wall_length + 0.0001F)
                 detail::issue(result, path, "opening must fit within its wall");
+            const float opening_top = opening.bottom + opening.height;
             if (!detail::nonnegative(opening.bottom) || !detail::positive(opening.height) ||
-                (wall_it != room.walls.end() && opening.bottom + opening.height > wall_it->height + 0.0001F))
+                !detail::finite(opening_top) ||
+                (wall_it != room.walls.end() &&
+                 opening_top > wall_it->height + 0.0001F))
                 detail::issue(result, path, "opening must fit within wall height");
-            for (const auto [start, end] : occupied) if (opening.offset < end && start < opening.offset + opening.width)
-                detail::issue(result, path, "overlaps another opening on the same wall");
-            occupied.emplace_back(opening.offset, opening.offset + opening.width);
-            if (!opening.material_id.empty() && !detail::has_id(material_ids, opening.material_id)) detail::issue(result, path + ".material_id", "references an unknown material");
+            if (detail::has_id(wall_ids, opening.wall_id) &&
+                detail::nonnegative(opening.offset) && detail::positive(opening.width) &&
+                detail::finite(opening_end)) {
+                auto& occupied = occupied_by_wall[opening.wall_id];
+                for (const auto& range : occupied) {
+                    if (opening.offset < range.end && range.start < opening_end) {
+                        detail::issue(result, path,
+                                      "overlaps another opening on the same wall");
+                        break;
+                    }
+                }
+                occupied.push_back({opening.offset, opening_end});
+            }
+            if (!opening.material_id.empty() &&
+                !detail::has_id(material_ids, opening.material_id))
+                detail::issue(result, path + ".material_id",
+                              "references an unknown material");
         };
-        for (std::size_t i = 0; i < room.doors.size(); ++i) validate_opening(room.doors[i], base + ".doors[" + std::to_string(i) + "]");
-        for (std::size_t i = 0; i < room.windows.size(); ++i) validate_opening(room.windows[i], base + ".windows[" + std::to_string(i) + "]");
+        for (std::size_t i = 0; i < room.doors.size(); ++i)
+            validate_opening(room.doors[i],
+                             base + ".doors[" + std::to_string(i) + "]");
+        for (std::size_t i = 0; i < room.windows.size(); ++i)
+            validate_opening(room.windows[i],
+                             base + ".windows[" + std::to_string(i) + "]");
         for (std::size_t i = 0; i < room.furniture.size(); ++i) {
             const auto path = base + ".furniture[" + std::to_string(i) + "]";
             const Furniture& item = room.furniture[i];
             detail::add_id(ids, item.id, path + ".id", result);
-            if (!detail::positive(item.dimensions.x) || !detail::positive(item.dimensions.y) || !detail::positive(item.dimensions.z)) detail::issue(result, path + ".dimensions", "must be positive and finite");
-            if (!item.material_id.empty() && !detail::has_id(material_ids, item.material_id)) detail::issue(result, path + ".material_id", "references an unknown material");
+            if (!detail::positive_vec3(item.dimensions))
+                detail::issue(result, path + ".dimensions", "must be positive and finite");
+            if (!detail::finite_vec3(item.transform.position))
+                detail::issue(result, path + ".transform.position", "must be finite");
+            if (!detail::positive_vec3(item.transform.scale))
+                detail::issue(result, path + ".transform.scale",
+                              "must be positive and finite");
+            const Quaternion rotation = item.transform.rotation;
+            const float rotation_length_squared =
+                rotation.w * rotation.w + rotation.x * rotation.x +
+                rotation.y * rotation.y + rotation.z * rotation.z;
+            if (!detail::finite_quaternion(rotation) ||
+                !detail::finite(rotation_length_squared) ||
+                std::fabs(rotation_length_squared - 1.0F) > 0.001F)
+                detail::issue(result, path + ".transform.rotation",
+                              "must be finite and normalized");
+            if (!item.material_id.empty() &&
+                !detail::has_id(material_ids, item.material_id))
+                detail::issue(result, path + ".material_id",
+                              "references an unknown material");
         }
     }
     return result;
@@ -259,33 +415,164 @@ inline void serialize(const RoomDesign& design, ISerializer& archive) {
         if (room.ceiling) { detail::write_string(out, room.ceiling->id); out << room.ceiling->boundary.size() << ' '; for (auto p : room.ceiling->boundary) detail::write_point(out, p); out << room.ceiling->elevation << ' '; detail::write_string(out, room.ceiling->material_id); }
         out << room.doors.size() << ' '; for (const auto& d : room.doors) { detail::write_string(out, d.id); detail::write_string(out, d.wall_id); out << d.offset << ' ' << d.width << ' ' << d.bottom << ' ' << d.height << ' ' << d.open << ' '; detail::write_string(out, d.material_id); }
         out << room.windows.size() << ' '; for (const auto& w : room.windows) { detail::write_string(out, w.id); detail::write_string(out, w.wall_id); out << w.offset << ' ' << w.width << ' ' << w.bottom << ' ' << w.height << ' '; detail::write_string(out, w.material_id); }
-        out << room.furniture.size() << ' '; for (const auto& f : room.furniture) { detail::write_string(out, f.id); detail::write_string(out, f.name); detail::write_transform(out, f.transform); detail::write_vec3(out, f.dimensions); detail::write_string(out, f.material_id); }
+        out << room.furniture.size() << ' ';
+        for (const auto& furniture : room.furniture) {
+            detail::write_string(out, furniture.id);
+            detail::write_string(out, furniture.name);
+            detail::write_transform(out, furniture.transform);
+            detail::write_vec3(out, furniture.dimensions);
+            detail::write_string(out, furniture.material_id);
+            if (design.version >= 2)
+                detail::write_string(out, furniture.asset_id);
+        }
     }
     archive.write_string("room_design", out.str());
 }
 
 [[nodiscard]] inline std::optional<RoomDesign> deserialize(const IDeserializer& archive) {
-    std::istringstream in{archive.read_string("room_design")};
-    RoomDesign design;
-    std::size_t count = 0;
-    if (!(in >> design.version >> count)) return std::nullopt;
-    constexpr std::size_t max_records = 1'000'000;
-    if (count > max_records) return std::nullopt;
-    for (std::size_t i = 0; i < count; ++i) { Material m; if (!detail::read_string(in, m.id) || !detail::read_string(in, m.name)) return std::nullopt; m.albedo = detail::read_vec3(in); in >> m.roughness; design.materials.push_back(std::move(m)); }
-    if (!(in >> count) || count > max_records) return std::nullopt;
-    for (std::size_t i = 0; i < count; ++i) {
-        Room room; if (!detail::read_string(in, room.id) || !detail::read_string(in, room.name) || !(in >> count)) return std::nullopt;
-        if (count > max_records) return std::nullopt;
-        for (std::size_t j = 0; j < count; ++j) { WallSegment w; if (!detail::read_string(in, w.id)) return std::nullopt; w.start = detail::read_point(in); w.end = detail::read_point(in); in >> w.thickness >> w.height; if (!detail::read_string(in, w.material_id)) return std::nullopt; room.walls.push_back(std::move(w)); }
-        bool present = false; in >> present; if (present) { Floor f; std::size_t points; detail::read_string(in, f.id); in >> points; f.boundary.reserve(points); for (std::size_t j = 0; j < points; ++j) f.boundary.push_back(detail::read_point(in)); in >> f.elevation; detail::read_string(in, f.material_id); room.floor = std::move(f); }
-        in >> present; if (present) { Ceiling c; std::size_t points; detail::read_string(in, c.id); in >> points; c.boundary.reserve(points); for (std::size_t j = 0; j < points; ++j) c.boundary.push_back(detail::read_point(in)); in >> c.elevation; detail::read_string(in, c.material_id); room.ceiling = std::move(c); }
-        if (!(in >> count) || count > max_records) return std::nullopt; for (std::size_t j = 0; j < count; ++j) { Door d; if (!detail::read_string(in, d.id) || !detail::read_string(in, d.wall_id)) return std::nullopt; in >> d.offset >> d.width >> d.bottom >> d.height >> d.open; if (!detail::read_string(in, d.material_id)) return std::nullopt; room.doors.push_back(std::move(d)); }
-        if (!(in >> count) || count > max_records) return std::nullopt; for (std::size_t j = 0; j < count; ++j) { Window w; if (!detail::read_string(in, w.id) || !detail::read_string(in, w.wall_id)) return std::nullopt; in >> w.offset >> w.width >> w.bottom >> w.height; if (!detail::read_string(in, w.material_id)) return std::nullopt; room.windows.push_back(std::move(w)); }
-        if (!(in >> count) || count > max_records) return std::nullopt; for (std::size_t j = 0; j < count; ++j) { Furniture f; if (!detail::read_string(in, f.id) || !detail::read_string(in, f.name)) return std::nullopt; f.transform = detail::read_transform(in); f.dimensions = detail::read_vec3(in); if (!detail::read_string(in, f.material_id)) return std::nullopt; room.furniture.push_back(std::move(f)); }
-        design.rooms.push_back(std::move(room));
+    try {
+        constexpr std::size_t max_payload_bytes = 64U * 1024U * 1024U;
+        constexpr std::size_t max_total_records = 1'000'000U;
+        const std::string payload = archive.read_string("room_design");
+        if (payload.empty() || payload.size() > max_payload_bytes) return std::nullopt;
+
+        std::istringstream in{payload};
+        std::uint32_t archive_version = 0;
+        std::size_t total_records = 0;
+        const auto read_count = [&](std::size_t& count) {
+            if (!(in >> count) || count > max_total_records - total_records) return false;
+            total_records += count;
+            return true;
+        };
+
+        std::size_t material_count = 0;
+        if (!(in >> archive_version) || archive_version == 0 ||
+            archive_version > RoomDesign::current_version || !read_count(material_count))
+            return std::nullopt;
+
+        RoomDesign design;
+        design.version = RoomDesign::current_version;
+        design.materials.reserve(material_count);
+        for (std::size_t i = 0; i < material_count; ++i) {
+            Material material;
+            if (!detail::read_string(in, material.id) ||
+                !detail::read_string(in, material.name) ||
+                !detail::read_vec3(in, material.albedo) || !(in >> material.roughness))
+                return std::nullopt;
+            design.materials.push_back(std::move(material));
+        }
+
+        std::size_t room_count = 0;
+        if (!read_count(room_count)) return std::nullopt;
+        design.rooms.reserve(room_count);
+        for (std::size_t room_index = 0; room_index < room_count; ++room_index) {
+            Room room;
+            std::size_t wall_count = 0;
+            if (!detail::read_string(in, room.id) ||
+                !detail::read_string(in, room.name) || !read_count(wall_count))
+                return std::nullopt;
+            room.walls.reserve(wall_count);
+            for (std::size_t i = 0; i < wall_count; ++i) {
+                WallSegment wall;
+                if (!detail::read_string(in, wall.id) ||
+                    !detail::read_point(in, wall.start) ||
+                    !detail::read_point(in, wall.end) ||
+                    !(in >> wall.thickness >> wall.height) ||
+                    !detail::read_string(in, wall.material_id))
+                    return std::nullopt;
+                room.walls.push_back(std::move(wall));
+            }
+
+            bool present = false;
+            if (!(in >> present)) return std::nullopt;
+            if (present) {
+                Floor floor;
+                std::size_t point_count = 0;
+                if (!detail::read_string(in, floor.id) || !read_count(point_count))
+                    return std::nullopt;
+                floor.boundary.reserve(point_count);
+                for (std::size_t i = 0; i < point_count; ++i) {
+                    Point2 point;
+                    if (!detail::read_point(in, point)) return std::nullopt;
+                    floor.boundary.push_back(point);
+                }
+                if (!(in >> floor.elevation) ||
+                    !detail::read_string(in, floor.material_id))
+                    return std::nullopt;
+                room.floor = std::move(floor);
+            }
+
+            if (!(in >> present)) return std::nullopt;
+            if (present) {
+                Ceiling ceiling;
+                std::size_t point_count = 0;
+                if (!detail::read_string(in, ceiling.id) || !read_count(point_count))
+                    return std::nullopt;
+                ceiling.boundary.reserve(point_count);
+                for (std::size_t i = 0; i < point_count; ++i) {
+                    Point2 point;
+                    if (!detail::read_point(in, point)) return std::nullopt;
+                    ceiling.boundary.push_back(point);
+                }
+                if (!(in >> ceiling.elevation) ||
+                    !detail::read_string(in, ceiling.material_id))
+                    return std::nullopt;
+                room.ceiling = std::move(ceiling);
+            }
+
+            std::size_t door_count = 0;
+            if (!read_count(door_count)) return std::nullopt;
+            room.doors.reserve(door_count);
+            for (std::size_t i = 0; i < door_count; ++i) {
+                Door door;
+                if (!detail::read_string(in, door.id) ||
+                    !detail::read_string(in, door.wall_id) ||
+                    !(in >> door.offset >> door.width >> door.bottom >> door.height >>
+                      door.open) ||
+                    !detail::read_string(in, door.material_id))
+                    return std::nullopt;
+                room.doors.push_back(std::move(door));
+            }
+
+            std::size_t window_count = 0;
+            if (!read_count(window_count)) return std::nullopt;
+            room.windows.reserve(window_count);
+            for (std::size_t i = 0; i < window_count; ++i) {
+                Window window;
+                if (!detail::read_string(in, window.id) ||
+                    !detail::read_string(in, window.wall_id) ||
+                    !(in >> window.offset >> window.width >> window.bottom >>
+                      window.height) ||
+                    !detail::read_string(in, window.material_id))
+                    return std::nullopt;
+                room.windows.push_back(std::move(window));
+            }
+
+            std::size_t furniture_count = 0;
+            if (!read_count(furniture_count)) return std::nullopt;
+            room.furniture.reserve(furniture_count);
+            for (std::size_t i = 0; i < furniture_count; ++i) {
+                Furniture furniture;
+                if (!detail::read_string(in, furniture.id) ||
+                    !detail::read_string(in, furniture.name) ||
+                    !detail::read_transform(in, furniture.transform) ||
+                    !detail::read_vec3(in, furniture.dimensions) ||
+                    !detail::read_string(in, furniture.material_id))
+                    return std::nullopt;
+                if (archive_version >= 2 &&
+                    !detail::read_string(in, furniture.asset_id))
+                    return std::nullopt;
+                room.furniture.push_back(std::move(furniture));
+            }
+            design.rooms.push_back(std::move(room));
+        }
+
+        in >> std::ws;
+        if (!in.eof()) return std::nullopt;
+        return std::optional<RoomDesign>{std::move(design)};
+    } catch (...) {
+        return std::nullopt;
     }
-    if (in.fail()) return std::nullopt;
-    return std::optional<RoomDesign>{std::move(design)};
 }
 
 }  // namespace room_engine
