@@ -1,0 +1,6 @@
+# External build dependencies. Update this file and SDL3_VERSION in the
+# Makefile together in a deliberate dependency upgrade.
+
+[sdl3]
+pkg-config-name = sdl3
+version = 3.4.14

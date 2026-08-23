@@ -9,10 +9,8 @@
 ## Language and build
 
 - **C++20** — engine and application code.
-- **CMake** — project generation and dependency management.
-- **Ninja** — fast local builds.
-- **Clang** — primary compiler on macOS and Linux.
-- **GCC** — supported Linux compiler.
+- **Make** — build system.
+- **Clang++** — only supported project compiler on macOS and Linux.
 - **clang-format** — source formatting.
 - **clang-tidy** — static analysis.
 

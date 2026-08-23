@@ -9,8 +9,8 @@ of rooms, walls, doors, windows, materials, and furniture.
 
 ## Project status
 
-This repository is currently in the planning and foundation stage. The first
-target is a small end-to-end vertical slice:
+The repository now contains the first end-to-end vertical slice plus
+presentation/export and profiling tooling:
 
 1. Create a rectangular room.
 2. Render the room in 3D.
@@ -18,6 +18,7 @@ target is a small end-to-end vertical slice:
 4. Update the 3D geometry immediately.
 5. Place and move one furniture object.
 6. Save and reload the project.
+7. Export project JSON, basic GLB geometry, SVG floor plans, and null-backend screenshots.
 
 ## Design direction
 
@@ -52,7 +53,8 @@ and serialization consistent across both views.
 ## Technology stack
 
 - **C++20** — engine and application code
-- **CMake** — build system
+- **Make** — build system
+- **Clang++** — the project compiler
 - **SDL3** — windowing, input, audio, and platform integration
 - **bgfx** — cross-platform rendering abstraction
 - **Metal** — macOS graphics backend
@@ -119,7 +121,7 @@ third_party/   External dependencies
 Development is divided into the following phases:
 
 1. Product definition
-2. CMake and platform foundation
+2. Make and platform foundation
 3. Engine core
 4. Rendering foundation
 5. 2D engine
@@ -138,17 +140,103 @@ See [TECHSTACK.md](TECHSTACK.md) for the technology and architecture decisions.
 See [PROMTS_FOR_AI.md](PROMTS_FOR_AI.md) for prompts that can be used to develop
 the engine phase by phase.
 
+Presentation and release notes are in [docs/GLB_LIMITATIONS.md](docs/GLB_LIMITATIONS.md),
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md), and
+[docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md). Use `make CONFIG=Release profile`
+to measure procedural build time and project size for 100–300 furniture objects.
+
+## Reusing the engine
+
+Build reusable component libraries with `make CONFIG=Debug libraries` or
+`make CONFIG=Release libraries`. Separate furniture-editor applications can
+include `room_engine/furniture_editor.hpp` and link the renderer library; the
+optional platform library owns SDL window/application setup. See
+[docs/INTEGRATION.md](docs/INTEGRATION.md) and run `make example` for a complete
+consumer that creates matching 2D and 3D furniture scenes.
+
 ## Initial development requirements
 
 The project will target:
 
-- macOS with Clang and CMake
-- Linux with Clang or GCC and CMake
+- macOS with Clang++
+- Linux with Clang++
 - Debug and Release builds
 - Unit tests for math, geometry, snapping, validation, and serialization
 
-Build instructions will be added when the initial CMake project and dependency
-configuration are implemented.
+SDL3 must be installed and discoverable through `pkg-config`.
+
+## Building the foundation
+
+The project uses Make and always compiles with `clang++`. SDL3 is the only
+external dependency in this foundation. Its exact `pkg-config` version is
+recorded in [dependencies.lock](dependencies.lock), and the Makefile refuses
+to build against a different version until the lock is deliberately updated.
+
+Install SDL3 3.4.14 and verify that it is visible:
+
+```sh
+pkg-config --modversion sdl3   # must print 3.4.14
+```
+
+On macOS with Homebrew:
+
+```sh
+brew install llvm pkg-config sdl3
+export PATH="$(brew --prefix llvm)/bin:$PATH"
+```
+
+On Debian/Ubuntu-like Linux distributions, use a repository that provides
+SDL3 development files, then install Clang, Make, and pkg-config alongside it:
+
+```sh
+sudo apt install clang make pkg-config libsdl3-dev
+```
+
+If the distribution package has another version, install SDL3 3.4.14 from
+source or update both `dependencies.lock` and `SDL3_VERSION` in the Makefile
+as a reviewed dependency change.
+
+Debug build and tests:
+
+```sh
+make debug
+make test
+```
+
+Release build and tests:
+
+```sh
+make release
+make CONFIG=Release test
+```
+
+On macOS, install LLVM/Apple Clang and SDL3 with Homebrew. On Linux, install
+Clang, Make, SDL3, and the SDL3 development package using the distribution's
+package manager. Verify that `pkg-config --modversion sdl3` succeeds.
+
+The `format` target runs the repository's `.clang-format` configuration, and
+`make check` runs the Debug smoke test plus formatting validation:
+
+```sh
+make format
+make check
+```
+
+The executable owns the SDL application lifecycle and submits a triangle plus
+debug grid and axes through the renderer abstraction. The default build uses a
+small no-op renderer when bgfx is unavailable, which keeps tests and engine
+tools buildable without a graphics SDK. To enable the bgfx backend, provide
+bgfx compiler/linker flags (for example, from a local bgfx build):
+
+```sh
+make BGFX_CFLAGS="-I/path/to/bgfx/include -I/path/to/bx/include" \
+     BGFX_LIBS="-L/path/to/bgfx/lib -lbgfx -lbx -lbimg" build
+```
+
+The shader manager accepts bgfx shader binaries produced from
+`assets/shaders/debug.vs.sc` and `debug.fs.sc` with bgfx's `shaderc` tool. The
+renderer API only exposes engine-owned handles and data types; bgfx types are
+confined to `renderer.cpp`.
 
 ## License
 

@@ -1,0 +1,146 @@
+SHELL := /bin/sh
+
+CXX := clang++
+PKG_CONFIG ?= pkg-config
+CLANG_FORMAT ?= clang-format
+
+CONFIG ?= Debug
+VALID_CONFIGS := Debug Release Sanitize
+ifeq ($(filter $(CONFIG),$(VALID_CONFIGS)),)
+$(error CONFIG must be one of: $(VALID_CONFIGS))
+endif
+
+SDL3_PKG ?= sdl3
+SDL3_VERSION ?= 3.4.14
+
+CPPFLAGS := -Isrc
+CXXFLAGS := -std=c++20 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror
+DEPFLAGS := -MMD -MP
+LDFLAGS :=
+LDLIBS :=
+
+ifeq ($(CONFIG),Debug)
+CONFIG_FLAGS := -O0 -g3
+else ifeq ($(CONFIG),Release)
+CONFIG_FLAGS := -O2 -DNDEBUG
+else
+CONFIG_FLAGS := -O1 -g3 -fno-omit-frame-pointer
+SANITIZER_FLAGS := -fsanitize=address,undefined
+endif
+
+SDL_CFLAGS := $(shell $(PKG_CONFIG) --cflags $(SDL3_PKG) 2>/dev/null)
+SDL_LIBS := $(shell $(PKG_CONFIG) --libs $(SDL3_PKG) 2>/dev/null)
+BGFX_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags bgfx 2>/dev/null)
+BGFX_LIBS ?= $(shell $(PKG_CONFIG) --libs bgfx 2>/dev/null)
+BGFX_PLATFORM_LIBS :=
+ifeq ($(shell uname -s),Darwin)
+BGFX_PLATFORM_LIBS += -framework Metal -framework QuartzCore -framework Cocoa -framework IOKit -framework CoreMedia -framework VideoToolbox
+endif
+ifneq ($(strip $(BGFX_CFLAGS)$(BGFX_LIBS)),)
+CPPFLAGS += -DROOM_ENGINE_USE_BGFX $(BGFX_CFLAGS)
+endif
+BUILD_DIR := out/$(shell printf '%s' $(CONFIG) | tr '[:upper:]' '[:lower:]')
+
+RENDER_SOURCES := src/room_engine/adapters/furniture_editor.cpp src/room_engine/core/presentation.cpp src/room_engine/renderer/renderer.cpp src/room_engine/renderer/debug_draw.cpp src/room_engine/renderer/renderer_2d.cpp src/room_engine/renderer/renderer_3d.cpp
+PLATFORM_SOURCES := src/room_engine/application.cpp
+APP_SOURCES := src/main.cpp
+TEST_SOURCES := tests/smoke_test.cpp tests/room_design_test.cpp
+EXAMPLE_SOURCES := examples/furniture_editor_integration.cpp
+FORMAT_SOURCES := $(RENDER_SOURCES) $(PLATFORM_SOURCES) $(APP_SOURCES) $(TEST_SOURCES) $(EXAMPLE_SOURCES) src/room_engine/application.hpp src/room_engine/core.hpp src/room_engine/rendering.hpp src/room_engine/furniture_editor.hpp src/room_engine/adapters/furniture_editor.hpp src/room_engine/core/room_design.hpp src/room_engine/core/presentation.hpp src/room_engine/core/floor_plan_editor.hpp src/room_engine/core/furniture_catalog.hpp src/room_engine/renderer/renderer.hpp src/room_engine/renderer/camera.hpp src/room_engine/renderer/math.hpp src/room_engine/renderer/debug_draw.hpp src/room_engine/renderer/viewport.hpp src/room_engine/renderer/renderer_2d.hpp src/room_engine/renderer/renderer_3d.hpp
+RENDER_OBJECTS := $(RENDER_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
+PLATFORM_OBJECTS := $(PLATFORM_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
+APP_OBJECTS := $(APP_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
+TEST_OBJECTS := $(TEST_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
+EXAMPLE_OBJECTS := $(EXAMPLE_SOURCES:%.cpp=$(BUILD_DIR)/%.o)
+LIB_RENDER := $(BUILD_DIR)/lib/libroom_engine_renderer.a
+LIB_PLATFORM := $(BUILD_DIR)/lib/libroom_engine_platform.a
+APP := $(BUILD_DIR)/room_engine_app
+TEST := $(BUILD_DIR)/room_engine_smoke_tests
+PROFILE := $(BUILD_DIR)/room_engine_profile
+EXAMPLE := $(BUILD_DIR)/furniture_editor_integration
+
+.PHONY: all debug release sanitize build libraries example test profile check format format-check clean help verify-tools verify-sdl
+
+all: debug
+
+debug:
+	$(MAKE) CONFIG=Debug build
+
+release:
+	$(MAKE) CONFIG=Release build
+
+sanitize:
+	$(MAKE) CONFIG=Sanitize test
+
+build: verify-tools verify-sdl libraries $(APP)
+
+libraries: $(LIB_RENDER) $(LIB_PLATFORM)
+
+$(LIB_RENDER): $(RENDER_OBJECTS)
+	@mkdir -p $(@D)
+	ar rcs $@ $^
+
+$(LIB_PLATFORM): $(PLATFORM_OBJECTS)
+	@mkdir -p $(@D)
+	ar rcs $@ $^
+
+$(APP): $(APP_OBJECTS) $(LIB_PLATFORM) $(LIB_RENDER)
+	@mkdir -p $(@D)
+	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(SANITIZER_FLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
+
+$(TEST): $(TEST_OBJECTS) $(LIB_RENDER)
+	@mkdir -p $(@D)
+	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(SANITIZER_FLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
+
+example: $(EXAMPLE)
+	$(EXAMPLE)
+
+$(EXAMPLE): $(EXAMPLE_OBJECTS) $(LIB_RENDER)
+	@mkdir -p $(@D)
+	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(SANITIZER_FLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
+
+$(TEST_OBJECTS): CPPFLAGS += -UNDEBUG
+
+$(BUILD_DIR)/%.o: %.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(CONFIG_FLAGS) $(CPPFLAGS) $(CXXFLAGS) $(SANITIZER_FLAGS) $(DEPFLAGS) $(SDL_CFLAGS) -c $< -o $@
+
+test: $(TEST)
+	$(TEST)
+
+profile: $(PROFILE)
+	$(PROFILE)
+
+$(PROFILE): $(BUILD_DIR)/tools/profile_engine.o $(LIB_RENDER)
+	@mkdir -p $(@D)
+	$(CXX) $(CONFIG_FLAGS) $(CXXFLAGS) $(SANITIZER_FLAGS) $(LDFLAGS) $^ $(SDL_LIBS) $(BGFX_LIBS) $(BGFX_PLATFORM_LIBS) $(LDLIBS) -o $@
+
+check: test format-check
+
+format:
+	$(CLANG_FORMAT) -i $(FORMAT_SOURCES)
+
+format-check:
+	@command -v $(CLANG_FORMAT) >/dev/null 2>&1 || { echo "error: clang-format is required" >&2; exit 1; }
+	@$(CLANG_FORMAT) --dry-run --Werror $(FORMAT_SOURCES)
+
+verify-tools:
+	@command -v $(CXX) >/dev/null 2>&1 || { echo "error: $(CXX) not found" >&2; exit 1; }
+	@command -v $(PKG_CONFIG) >/dev/null 2>&1 || { echo "error: $(PKG_CONFIG) not found" >&2; exit 1; }
+
+verify-sdl:
+	@$(PKG_CONFIG) --exists $(SDL3_PKG) || { echo "error: SDL3 was not found through $(PKG_CONFIG)" >&2; exit 1; }
+	@test "$$($(PKG_CONFIG) --modversion $(SDL3_PKG))" = "$(SDL3_VERSION)" || { \
+		echo "error: expected SDL3 $(SDL3_VERSION), found $$($(PKG_CONFIG) --modversion $(SDL3_PKG))" >&2; \
+		echo "       set SDL3_VERSION=... only when intentionally updating the lock" >&2; exit 1; }
+
+clean:
+	rm -rf out
+
+help:
+	@echo "make [debug|release|sanitize|libraries|example|test|profile|check|format|clean]"
+	@echo "  CONFIG=Debug|Release|Sanitize selects out/debug, out/release, or out/sanitize"
+	@echo "  sanitize runs the tests with AddressSanitizer and UndefinedBehaviorSanitizer"
+	@echo "  libraries builds reusable static libraries under out/<config>/lib"
+
+-include $(RENDER_OBJECTS:.o=.d) $(PLATFORM_OBJECTS:.o=.d) $(APP_OBJECTS:.o=.d) $(TEST_OBJECTS:.o=.d) $(EXAMPLE_OBJECTS:.o=.d)

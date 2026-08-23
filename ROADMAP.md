@@ -30,7 +30,7 @@ Deliverable: a short product specification, interaction sketches, and acceptance
 
 Implement:
 
-- CMake project structure.
+- Make project structure using clang++.
 - C++20 compiler configuration.
 - SDL3 window, input, and application lifecycle.
 - Logging, assertions, timing, and error handling.

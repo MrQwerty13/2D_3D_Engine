@@ -7,7 +7,7 @@ Use these prompts one phase at a time. Ask the AI to inspect the existing reposi
 ```text
 You are helping develop a cross-platform C++20 engine for macOS and Linux.
 The engine supports both 2D and 3D rendering and is intended for a room-design application.
-Use CMake, SDL3, bgfx, GLM, Dear ImGui, and glTF/GLB assets where appropriate.
+Use Make, clang++, SDL3, bgfx, GLM, Dear ImGui, and glTF/GLB assets where appropriate.
 
 Before changing code:
 1. Inspect the repository and summarize relevant existing files.
@@ -31,10 +31,10 @@ acceptance criteria, and the first vertical slice from room creation to saved pr
 Keep the scope suitable for a small engineering team.
 ```
 
-## Phase 1 — CMake and platform foundation
+## Phase 1 — Make and Clang++ platform foundation
 
 ```text
-Set up the C++20 CMake foundation for a macOS and Linux application.
+Set up the C++20 Make foundation using clang++ for a macOS and Linux application.
 Add SDL3, Debug/Release configurations, compiler warnings, formatting,
 tests, and a minimal executable. Keep dependencies reproducible and explain
 how to build on both platforms. Do not add rendering yet.
